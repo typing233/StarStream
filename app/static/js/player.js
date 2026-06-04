@@ -41,6 +41,16 @@ function renderVideoPlayer(container, item) {
     const token = getToken();
     const streamUrl = `/api/stream/file/${item.id}?token=${token}`;
 
+    // Pick a default transcode resolution based on source resolution
+    const srcRes = item.metadata_json?.resolution || '';
+    let autoResolution = '720p';
+    if (srcRes) {
+        const height = parseInt(srcRes.split('x')[1]) || 0;
+        if (height <= 480) autoResolution = '480p';
+        else if (height <= 720) autoResolution = '720p';
+        else autoResolution = '1080p';
+    }
+
     container.innerHTML = `
         <div class="player-container">
             <div class="player-back">
@@ -103,27 +113,53 @@ function renderVideoPlayer(container, item) {
 
     let currentResolution = 'original';
     let currentAudioTrack = 0;
+    let totalDuration = item.duration || 0;
+    let transcodeStartTime = 0; // the wall-clock offset we passed to ffmpeg
 
     video.src = streamUrl;
 
-    function reloadWithSettings() {
-        const wasPlaying = !video.paused;
-        const currentTime = video.currentTime;
+    function buildTranscodeUrl(seekTime) {
+        const res = currentResolution === 'original' ? autoResolution : currentResolution;
+        let url = `/api/stream/transcode/${item.id}?resolution=${res}&audio_track=${currentAudioTrack}&token=${token}`;
+        if (seekTime > 0) url += `&start_time=${seekTime.toFixed(2)}`;
+        return url;
+    }
 
-        if (currentResolution === 'original') {
-            video.src = `/api/stream/file/${item.id}?token=${token}`;
-        } else {
-            video.src = `/api/stream/transcode/${item.id}?resolution=${currentResolution}&audio_track=${currentAudioTrack}&token=${token}`;
-        }
-
-        video.addEventListener('loadedmetadata', function onMeta() {
-            video.removeEventListener('loadedmetadata', onMeta);
-            if (currentResolution === 'original') {
-                video.currentTime = currentTime;
-            }
-            if (wasPlaying) video.play().catch(() => {});
-        });
+    function switchToTranscode(seekTime) {
+        transcodeStartTime = seekTime;
+        video.src = buildTranscodeUrl(seekTime);
         video.load();
+        video.play().catch(() => {});
+        if (currentResolution === 'original') {
+            currentResolution = autoResolution;
+            resolutionSelect.value = autoResolution;
+        }
+    }
+
+    function reloadWithSettings() {
+        const seekTime = getEffectiveTime();
+
+        if (currentResolution === 'original' && currentAudioTrack === 0) {
+            // Back to raw file streaming
+            transcodeStartTime = 0;
+            video.src = streamUrl;
+            video.load();
+            video.addEventListener('loadedmetadata', function onMeta() {
+                video.removeEventListener('loadedmetadata', onMeta);
+                video.currentTime = seekTime;
+                video.play().catch(() => {});
+            });
+        } else {
+            switchToTranscode(seekTime);
+        }
+    }
+
+    function getEffectiveTime() {
+        // In transcode mode, real position = transcodeStartTime + video.currentTime
+        if (transcodeStartTime > 0) {
+            return transcodeStartTime + (video.currentTime || 0);
+        }
+        return video.currentTime || 0;
     }
 
     playBtn.addEventListener('click', () => {
@@ -134,19 +170,34 @@ function renderVideoPlayer(container, item) {
     video.addEventListener('play', () => playBtn.textContent = '⏸');
     video.addEventListener('pause', () => playBtn.textContent = '▶');
 
+    video.addEventListener('loadedmetadata', () => {
+        if (currentResolution === 'original' && video.duration && isFinite(video.duration)) {
+            totalDuration = video.duration;
+        }
+    });
+
     video.addEventListener('timeupdate', () => {
-        if (video.duration && isFinite(video.duration)) {
-            const pct = (video.currentTime / video.duration) * 100;
-            progressFill.style.width = pct + '%';
-            timeDisplay.textContent = `${formatDuration(video.currentTime)} / ${formatDuration(video.duration)}`;
+        const effectiveTime = getEffectiveTime();
+        const dur = totalDuration || item.duration || 0;
+        if (dur > 0) {
+            const pct = (effectiveTime / dur) * 100;
+            progressFill.style.width = Math.min(pct, 100) + '%';
+            timeDisplay.textContent = `${formatDuration(effectiveTime)} / ${formatDuration(dur)}`;
         }
     });
 
     progressBar.addEventListener('click', (e) => {
-        if (video.duration && isFinite(video.duration)) {
-            const rect = progressBar.getBoundingClientRect();
-            const pct = (e.clientX - rect.left) / rect.width;
-            video.currentTime = pct * video.duration;
+        const dur = totalDuration || item.duration || 0;
+        if (dur <= 0) return;
+        const rect = progressBar.getBoundingClientRect();
+        const pct = (e.clientX - rect.left) / rect.width;
+        const seekTime = pct * dur;
+
+        if (currentResolution === 'original' && currentAudioTrack === 0) {
+            video.currentTime = seekTime;
+        } else {
+            // For transcode mode, restart transcode at new position
+            switchToTranscode(seekTime);
         }
     });
 
@@ -167,12 +218,11 @@ function renderVideoPlayer(container, item) {
 
     loadTracksForVideo(item.id, token, (audioIdx) => {
         currentAudioTrack = audioIdx;
-        if (currentResolution !== 'original') {
-            showTrackStatus(`切换音轨: Track ${audioIdx + 1}`);
-            reloadWithSettings();
-        } else {
-            showTrackStatus('音轨切换需要选择非原始画质（转码模式下生效）');
-        }
+        showTrackStatus(`正在切换到音轨 ${audioIdx + 1}...`);
+        // Audio track switch always uses transcode — switch immediately
+        const seekTime = getEffectiveTime();
+        switchToTranscode(seekTime);
+        showTrackStatus(`已切换音轨 ${audioIdx + 1}`);
     });
 }
 

@@ -88,18 +88,24 @@ async def transcode_stream(
     file_path: str,
     resolution: str = "720p",
     audio_track: int = 0,
+    start_time: float = 0,
 ) -> AsyncGenerator[bytes, None]:
     preset = RESOLUTION_PRESETS.get(resolution, RESOLUTION_PRESETS["720p"])
 
-    cmd = [
-        "ffmpeg", "-i", file_path,
+    cmd = ["ffmpeg"]
+    if start_time > 0:
+        cmd += ["-ss", str(start_time)]
+    cmd += [
+        "-i", file_path,
         "-map", "0:v:0", "-map", f"0:a:{audio_track}",
         "-vf", f"scale={preset['width']}:{preset['height']}:force_original_aspect_ratio=decrease",
         "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-        "-b:v", preset["bitrate"], "-maxrate", preset["bitrate"], "-bufsize", str(int(preset["bitrate"].rstrip("k")) * 2) + "k",
+        "-b:v", preset["bitrate"], "-maxrate", preset["bitrate"],
+        "-bufsize", str(int(preset["bitrate"].rstrip("k")) * 2) + "k",
         "-c:a", "aac", "-b:a", "128k", "-ac", "2",
-        "-f", "mpegts", "-movflags", "frag_keyframe+empty_moov",
-        "-"
+        "-f", "mpegts",
+        "-mpegts_flags", "initial_discontinuity",
+        "-",
     ]
 
     process = subprocess.Popen(
@@ -116,4 +122,7 @@ async def transcode_stream(
             yield chunk
     finally:
         process.send_signal(signal.SIGTERM)
-        process.wait(timeout=5)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()

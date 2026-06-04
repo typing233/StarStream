@@ -81,6 +81,7 @@ async def transcode_file(
     media_id: int,
     resolution: str = Query("720p"),
     audio_track: int = Query(0),
+    start_time: float = Query(0),
     user: User = Depends(get_current_user_from_token_param),
     db: Session = Depends(get_db),
 ):
@@ -93,7 +94,7 @@ async def transcode_file(
         raise HTTPException(status_code=404, detail="File not found on disk")
 
     return StreamingResponse(
-        transcode_stream(item.file_path, resolution, audio_track),
+        transcode_stream(item.file_path, resolution, audio_track, start_time),
         media_type="video/mp2t",
         headers={"Transfer-Encoding": "chunked"},
     )
