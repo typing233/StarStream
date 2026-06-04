@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StarStream</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div id="app">
+        <nav id="navbar" class="hidden">
+            <div class="nav-brand">StarStream</div>
+            <div class="nav-links">
+                <a href="#/browse" class="nav-link" data-page="browse">媒体库</a>
+                <a href="#/libraries" class="nav-link" data-page="libraries">目录管理</a>
+            </div>
+            <div class="nav-right">
+                <span id="username-display"></span>
+                <button id="logout-btn" class="btn btn-sm">退出</button>
+            </div>
+        </nav>
+        <main id="content"></main>
+    </div>
+    <script src="/static/js/app.js" type="module"></script>
+</body>
+</html>
