@@ -2,7 +2,6 @@ import os
 import re
 import json
 import subprocess
-import asyncio
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -20,7 +19,7 @@ EBOOK_EXTENSIONS = {".pdf", ".epub", ".mobi", ".cbz", ".cbr"}
 
 ALL_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS | IMAGE_EXTENSIONS | EBOOK_EXTENSIONS
 
-YEAR_PATTERN = re.compile(r"(19|20)\d{2}")
+YEAR_PATTERN = re.compile(r"(?:^|[\s\.\-_\(\[])((19|20)\d{2})(?:[\s\.\-_\)\]]|$)")
 
 
 def get_media_type(ext: str) -> str:
@@ -36,11 +35,16 @@ def get_media_type(ext: str) -> str:
     return "unknown"
 
 
-def extract_year_from_filename(filename: str) -> int | None:
-    matches = YEAR_PATTERN.findall(filename)
-    if matches:
-        year = int(matches[-1])
-        if 1900 <= year <= datetime.now().year + 1:
+def extract_year_from_string(text: str) -> int | None:
+    matches = YEAR_PATTERN.findall(text)
+    for match in reversed(matches):
+        year = int(match[0])
+        if 1920 <= year <= datetime.now().year + 1:
+            return year
+    plain = re.findall(r"((?:19|20)\d{2})", text)
+    for m in reversed(plain):
+        year = int(m)
+        if 1920 <= year <= datetime.now().year + 1:
             return year
     return None
 
@@ -123,10 +127,15 @@ def scan_media_file(file_path: str, library_id: int) -> dict | None:
 
     media_type = get_media_type(ext)
     title = path.stem.replace(".", " ").replace("_", " ").replace("-", " ").strip()
-    year = extract_year_from_filename(path.name)
+    year = extract_year_from_string(path.name)
+    if not year:
+        year = extract_year_from_string(str(path.parent.name))
     duration = None
     file_size = path.stat().st_size
-    metadata = {}
+    metadata = {
+        "format": ext.lstrip("."),
+        "file_name": path.name,
+    }
     cover_path = None
 
     thumb_name = f"{library_id}_{hash(file_path) & 0xFFFFFFFF}.jpg"
@@ -136,20 +145,36 @@ def scan_media_file(file_path: str, library_id: int) -> dict | None:
         probe = run_ffprobe(file_path)
         if probe and "format" in probe:
             duration = float(probe["format"].get("duration", 0)) or None
-            metadata["format"] = probe["format"].get("format_long_name", "")
-            metadata["bit_rate"] = probe["format"].get("bit_rate", "")
+            metadata["format"] = probe["format"].get("format_long_name", ext.lstrip("."))
+            metadata["bit_rate"] = probe["format"].get("bit_rate", "unknown")
+            metadata["resolution"] = "unknown"
+            metadata["codec"] = "unknown"
+            audio_streams = 0
+            subtitle_streams = 0
             for stream in probe.get("streams", []):
-                if stream.get("codec_type") == "video":
-                    metadata["resolution"] = f"{stream.get('width', '?')}x{stream.get('height', '?')}"
-                    metadata["codec"] = stream.get("codec_name", "")
-                    break
+                if stream.get("codec_type") == "video" and metadata["resolution"] == "unknown":
+                    w = stream.get("width", 0)
+                    h = stream.get("height", 0)
+                    metadata["resolution"] = f"{w}x{h}" if w and h else "unknown"
+                    metadata["codec"] = stream.get("codec_name", "unknown")
+                    metadata["fps"] = stream.get("r_frame_rate", "unknown")
+                elif stream.get("codec_type") == "audio":
+                    audio_streams += 1
+                elif stream.get("codec_type") == "subtitle":
+                    subtitle_streams += 1
+            metadata["audio_tracks"] = audio_streams
+            metadata["subtitle_tracks"] = subtitle_streams
+
             tags = probe["format"].get("tags", {})
-            if "title" in tags and tags["title"].strip():
-                title = tags["title"].strip()
-            if "date" in tags:
-                y = extract_year_from_filename(tags["date"])
-                if y:
-                    year = y
+            tags_lower = {k.lower(): v for k, v in tags.items()}
+            if tags_lower.get("title", "").strip():
+                title = tags_lower["title"].strip()
+            for date_key in ("date", "creation_time", "year"):
+                if date_key in tags_lower:
+                    y = extract_year_from_string(tags_lower[date_key])
+                    if y:
+                        year = y
+                        break
         if extract_video_thumbnail(file_path, thumb_path):
             cover_path = thumb_name
 
@@ -158,26 +183,44 @@ def scan_media_file(file_path: str, library_id: int) -> dict | None:
             audio = MutagenFile(file_path)
             if audio and audio.info:
                 duration = audio.info.length
-                metadata["sample_rate"] = getattr(audio.info, "sample_rate", None)
-                metadata["channels"] = getattr(audio.info, "channels", None)
-                metadata["bitrate"] = getattr(audio.info, "bitrate", None)
+                metadata["sample_rate"] = getattr(audio.info, "sample_rate", None) or "unknown"
+                metadata["channels"] = getattr(audio.info, "channels", None) or "unknown"
+                metadata["bitrate"] = getattr(audio.info, "bitrate", None) or "unknown"
+            else:
+                metadata["sample_rate"] = "unknown"
+                metadata["channels"] = "unknown"
+                metadata["bitrate"] = "unknown"
+
+            metadata["artist"] = "unknown"
+            metadata["album"] = "unknown"
+
             if audio and audio.tags:
-                tag_title = audio.tags.get("TIT2") or audio.tags.get("title")
+                tag_title = audio.tags.get("TIT2") or audio.tags.get("title") or audio.tags.get("\xa9nam")
                 if tag_title:
                     title = str(tag_title[0]) if isinstance(tag_title, list) else str(tag_title)
-                tag_date = audio.tags.get("TDRC") or audio.tags.get("date")
+
+                tag_date = (audio.tags.get("TDRC") or audio.tags.get("date")
+                           or audio.tags.get("\xa9day") or audio.tags.get("TYER"))
                 if tag_date:
-                    y = extract_year_from_filename(str(tag_date[0] if isinstance(tag_date, list) else tag_date))
+                    date_str = str(tag_date[0] if isinstance(tag_date, list) else tag_date)
+                    y = extract_year_from_string(date_str)
                     if y:
                         year = y
-                tag_artist = audio.tags.get("TPE1") or audio.tags.get("artist")
+
+                tag_artist = audio.tags.get("TPE1") or audio.tags.get("artist") or audio.tags.get("\xa9ART")
                 if tag_artist:
                     metadata["artist"] = str(tag_artist[0]) if isinstance(tag_artist, list) else str(tag_artist)
-                tag_album = audio.tags.get("TALB") or audio.tags.get("album")
+
+                tag_album = audio.tags.get("TALB") or audio.tags.get("album") or audio.tags.get("\xa9alb")
                 if tag_album:
                     metadata["album"] = str(tag_album[0]) if isinstance(tag_album, list) else str(tag_album)
         except Exception:
-            pass
+            metadata.setdefault("sample_rate", "unknown")
+            metadata.setdefault("channels", "unknown")
+            metadata.setdefault("bitrate", "unknown")
+            metadata.setdefault("artist", "unknown")
+            metadata.setdefault("album", "unknown")
+
         if extract_audio_cover(file_path, thumb_path):
             cover_path = thumb_name
 
@@ -186,13 +229,31 @@ def scan_media_file(file_path: str, library_id: int) -> dict | None:
             with Image.open(file_path) as img:
                 metadata["resolution"] = f"{img.width}x{img.height}"
                 metadata["mode"] = img.mode
+                metadata["image_format"] = img.format or ext.lstrip(".")
         except Exception:
-            pass
+            metadata["resolution"] = "unknown"
+            metadata["mode"] = "unknown"
+            metadata["image_format"] = ext.lstrip(".")
         if extract_image_thumbnail(file_path, thumb_path):
             cover_path = thumb_name
 
     elif media_type == "ebook":
         metadata["format"] = ext.lstrip(".")
+        metadata["pages"] = "unknown"
+        if ext == ".pdf":
+            try:
+                result = subprocess.run(
+                    ["python3", "-c",
+                     f"from PIL import Image; import fitz; doc=fitz.open('{file_path}'); print(len(doc))"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0 and result.stdout.strip().isdigit():
+                    metadata["pages"] = int(result.stdout.strip())
+            except Exception:
+                pass
+
+    if not year:
+        year = None
 
     return {
         "library_id": library_id,

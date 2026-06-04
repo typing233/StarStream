@@ -39,7 +39,7 @@ export async function renderPlayer(container, mediaId) {
 
 function renderVideoPlayer(container, item) {
     const token = getToken();
-    const streamUrl = `/api/stream/file/${item.id}`;
+    const streamUrl = `/api/stream/file/${item.id}?token=${token}`;
 
     container.innerHTML = `
         <div class="player-container">
@@ -55,6 +55,8 @@ function renderVideoPlayer(container, item) {
                     <div class="progress-fill" id="progress-fill"></div>
                 </div>
                 <span class="time-display" id="time-display">0:00 / 0:00</span>
+                <button id="volume-btn" class="btn btn-sm btn-outline">🔊</button>
+                <input type="range" id="volume-slider" min="0" max="1" step="0.05" value="1" style="width:60px">
                 <button id="fullscreen-btn" class="btn btn-sm btn-outline">⛶</button>
             </div>
             <div class="player-info">
@@ -65,26 +67,27 @@ function renderVideoPlayer(container, item) {
                     ${item.metadata_json?.resolution ? ' · ' + item.metadata_json.resolution : ''}
                     ${item.metadata_json?.codec ? ' · ' + item.metadata_json.codec : ''}
                 </p>
-                <div class="player-options">
+                <div class="player-options" id="player-options">
                     <div>
                         <label style="font-size:0.8rem;color:var(--text-secondary)">画质</label>
                         <select id="resolution-select">
-                            <option value="original">原始</option>
+                            <option value="original" selected>原始画质</option>
                             <option value="1080p">1080p</option>
                             <option value="720p">720p</option>
                             <option value="480p">480p</option>
                             <option value="360p">360p</option>
                         </select>
                     </div>
-                    <div id="audio-track-container" class="hidden">
+                    <div id="audio-track-wrapper" class="hidden">
                         <label style="font-size:0.8rem;color:var(--text-secondary)">音轨</label>
                         <select id="audio-track-select"></select>
                     </div>
-                    <div id="subtitle-container" class="hidden">
+                    <div id="subtitle-wrapper" class="hidden">
                         <label style="font-size:0.8rem;color:var(--text-secondary)">字幕</label>
                         <select id="subtitle-select"></select>
                     </div>
                 </div>
+                <div id="track-status" style="margin-top:0.5rem;font-size:0.8rem;color:var(--success)" class="hidden"></div>
             </div>
         </div>
     `;
@@ -95,22 +98,33 @@ function renderVideoPlayer(container, item) {
     const progressFill = document.getElementById('progress-fill');
     const timeDisplay = document.getElementById('time-display');
     const fullscreenBtn = document.getElementById('fullscreen-btn');
+    const volumeSlider = document.getElementById('volume-slider');
     const resolutionSelect = document.getElementById('resolution-select');
 
-    function loadSource(resolution, audioTrack = 0) {
-        const currentTime = video.currentTime;
-        if (resolution === 'original') {
-            video.src = streamUrl + `?token=${token}`;
-        } else {
-            video.src = `/api/stream/transcode/${item.id}?resolution=${resolution}&audio_track=${audioTrack}&token=${token}`;
-        }
-        video.currentTime = currentTime;
-        video.play().catch(() => {});
-    }
+    let currentResolution = 'original';
+    let currentAudioTrack = 0;
 
-    // Use fetch with auth header workaround: set src with token param
-    // We need a custom approach since video element can't send auth headers
-    video.src = streamUrl + `?token=${token}`;
+    video.src = streamUrl;
+
+    function reloadWithSettings() {
+        const wasPlaying = !video.paused;
+        const currentTime = video.currentTime;
+
+        if (currentResolution === 'original') {
+            video.src = `/api/stream/file/${item.id}?token=${token}`;
+        } else {
+            video.src = `/api/stream/transcode/${item.id}?resolution=${currentResolution}&audio_track=${currentAudioTrack}&token=${token}`;
+        }
+
+        video.addEventListener('loadedmetadata', function onMeta() {
+            video.removeEventListener('loadedmetadata', onMeta);
+            if (currentResolution === 'original') {
+                video.currentTime = currentTime;
+            }
+            if (wasPlaying) video.play().catch(() => {});
+        });
+        video.load();
+    }
 
     playBtn.addEventListener('click', () => {
         if (video.paused) { video.play(); playBtn.textContent = '⏸'; }
@@ -121,7 +135,7 @@ function renderVideoPlayer(container, item) {
     video.addEventListener('pause', () => playBtn.textContent = '▶');
 
     video.addEventListener('timeupdate', () => {
-        if (video.duration) {
+        if (video.duration && isFinite(video.duration)) {
             const pct = (video.currentTime / video.duration) * 100;
             progressFill.style.width = pct + '%';
             timeDisplay.textContent = `${formatDuration(video.currentTime)} / ${formatDuration(video.duration)}`;
@@ -129,9 +143,15 @@ function renderVideoPlayer(container, item) {
     });
 
     progressBar.addEventListener('click', (e) => {
-        const rect = progressBar.getBoundingClientRect();
-        const pct = (e.clientX - rect.left) / rect.width;
-        video.currentTime = pct * video.duration;
+        if (video.duration && isFinite(video.duration)) {
+            const rect = progressBar.getBoundingClientRect();
+            const pct = (e.clientX - rect.left) / rect.width;
+            video.currentTime = pct * video.duration;
+        }
+    });
+
+    volumeSlider.addEventListener('input', () => {
+        video.volume = parseFloat(volumeSlider.value);
     });
 
     fullscreenBtn.addEventListener('click', () => {
@@ -140,64 +160,95 @@ function renderVideoPlayer(container, item) {
     });
 
     resolutionSelect.addEventListener('change', () => {
-        const audioSelect = document.getElementById('audio-track-select');
-        const audioTrack = audioSelect ? parseInt(audioSelect.value) || 0 : 0;
-        loadSource(resolutionSelect.value, audioTrack);
+        currentResolution = resolutionSelect.value;
+        showTrackStatus(`切换画质: ${currentResolution === 'original' ? '原始' : currentResolution}`);
+        reloadWithSettings();
     });
 
-    loadTracks(item.id);
+    loadTracksForVideo(item.id, token, (audioIdx) => {
+        currentAudioTrack = audioIdx;
+        if (currentResolution !== 'original') {
+            showTrackStatus(`切换音轨: Track ${audioIdx + 1}`);
+            reloadWithSettings();
+        } else {
+            showTrackStatus('音轨切换需要选择非原始画质（转码模式下生效）');
+        }
+    });
 }
 
-async function loadTracks(mediaId) {
+function showTrackStatus(msg) {
+    const el = document.getElementById('track-status');
+    if (el) {
+        el.textContent = msg;
+        el.classList.remove('hidden');
+        setTimeout(() => el.classList.add('hidden'), 3000);
+    }
+}
+
+async function loadTracksForVideo(mediaId, token, onAudioChange) {
     try {
-        const token = getToken();
         const res = await fetch(`/api/stream/tracks/${mediaId}?token=${token}`);
+        if (!res.ok) return;
         const tracks = await res.json();
 
-        if (tracks.audio_tracks && tracks.audio_tracks.length > 1) {
-            const container = document.getElementById('audio-track-container');
+        if (tracks.audio_tracks && tracks.audio_tracks.length > 0) {
+            const wrapper = document.getElementById('audio-track-wrapper');
             const select = document.getElementById('audio-track-select');
-            container.classList.remove('hidden');
+            wrapper.classList.remove('hidden');
             select.innerHTML = tracks.audio_tracks.map((t, i) =>
-                `<option value="${i}">${t.title} (${t.language})</option>`
+                `<option value="${i}">${t.title} [${t.language}] (${t.codec}, ${t.channels}ch)</option>`
             ).join('');
 
             select.addEventListener('change', () => {
-                const resSelect = document.getElementById('resolution-select');
-                const video = document.getElementById('video-el');
-                if (resSelect.value !== 'original') {
-                    const currentTime = video.currentTime;
-                    video.src = `/api/stream/transcode/${mediaId}?resolution=${resSelect.value}&audio_track=${select.value}&token=${getToken()}`;
-                    video.currentTime = currentTime;
-                    video.play().catch(() => {});
-                }
+                onAudioChange(parseInt(select.value));
             });
         }
 
         if (tracks.subtitle_tracks && tracks.subtitle_tracks.length > 0) {
-            const container = document.getElementById('subtitle-container');
+            const wrapper = document.getElementById('subtitle-wrapper');
             const select = document.getElementById('subtitle-select');
-            container.classList.remove('hidden');
-            select.innerHTML = `<option value="">关闭</option>` +
+            wrapper.classList.remove('hidden');
+            select.innerHTML = `<option value="">关闭字幕</option>` +
                 tracks.subtitle_tracks.map(t =>
-                    `<option value="${t.index}">${t.title} (${t.language})</option>`
+                    `<option value="${t.index}">${t.title} [${t.language}] (${t.codec})</option>`
                 ).join('');
 
             select.addEventListener('change', () => {
                 const video = document.getElementById('video-el');
-                // Remove existing tracks
-                video.querySelectorAll('track').forEach(t => t.remove());
+                // Remove all existing text tracks
+                while (video.querySelector('track')) {
+                    video.querySelector('track').remove();
+                }
+                // Clear existing textTracks display
+                for (let i = 0; i < video.textTracks.length; i++) {
+                    video.textTracks[i].mode = 'disabled';
+                }
+
                 if (select.value) {
-                    const track = document.createElement('track');
-                    track.kind = 'subtitles';
-                    track.src = `/api/stream/subtitle/${mediaId}/${select.value}?token=${getToken()}`;
-                    track.default = true;
-                    video.appendChild(track);
-                    video.textTracks[0].mode = 'showing';
+                    const trackEl = document.createElement('track');
+                    trackEl.kind = 'subtitles';
+                    trackEl.label = select.options[select.selectedIndex].text;
+                    trackEl.srclang = 'und';
+                    trackEl.src = `/api/stream/subtitle/${mediaId}/${select.value}?token=${token}`;
+                    trackEl.default = true;
+                    video.appendChild(trackEl);
+
+                    // Force the new track to show
+                    setTimeout(() => {
+                        if (video.textTracks.length > 0) {
+                            video.textTracks[video.textTracks.length - 1].mode = 'showing';
+                        }
+                    }, 100);
+
+                    showTrackStatus(`字幕已开启: ${select.options[select.selectedIndex].text}`);
+                } else {
+                    showTrackStatus('字幕已关闭');
                 }
             });
         }
-    } catch (e) {}
+    } catch (e) {
+        console.error('Failed to load tracks:', e);
+    }
 }
 
 function renderAudioPlayer(container, item) {
@@ -216,8 +267,8 @@ function renderAudioPlayer(container, item) {
                 </div>
                 <h2>${escapeHtml(item.title)}</h2>
                 <p style="color:var(--text-secondary);margin:0.5rem 0">
-                    ${item.metadata_json?.artist ? item.metadata_json.artist + ' · ' : ''}
-                    ${item.metadata_json?.album || ''}
+                    ${item.metadata_json?.artist && item.metadata_json.artist !== 'unknown' ? item.metadata_json.artist : ''}
+                    ${item.metadata_json?.album && item.metadata_json.album !== 'unknown' ? ' · ' + item.metadata_json.album : ''}
                     ${item.year ? ' · ' + item.year : ''}
                 </p>
                 <audio id="audio-el" preload="metadata" src="/api/stream/file/${item.id}?token=${token}"></audio>
@@ -227,6 +278,7 @@ function renderAudioPlayer(container, item) {
                         <div class="progress-fill" id="progress-fill"></div>
                     </div>
                     <span class="time-display" id="time-display">0:00 / 0:00</span>
+                    <input type="range" id="volume-slider" min="0" max="1" step="0.05" value="1" style="width:60px">
                 </div>
             </div>
         </div>
@@ -237,22 +289,32 @@ function renderAudioPlayer(container, item) {
     const progressBar = document.getElementById('progress-bar');
     const progressFill = document.getElementById('progress-fill');
     const timeDisplay = document.getElementById('time-display');
+    const volumeSlider = document.getElementById('volume-slider');
 
     playBtn.addEventListener('click', () => {
         if (audio.paused) { audio.play(); playBtn.textContent = '⏸'; }
         else { audio.pause(); playBtn.textContent = '▶'; }
     });
 
+    audio.addEventListener('play', () => playBtn.textContent = '⏸');
+    audio.addEventListener('pause', () => playBtn.textContent = '▶');
+
     audio.addEventListener('timeupdate', () => {
-        if (audio.duration) {
+        if (audio.duration && isFinite(audio.duration)) {
             progressFill.style.width = (audio.currentTime / audio.duration) * 100 + '%';
             timeDisplay.textContent = `${formatDuration(audio.currentTime)} / ${formatDuration(audio.duration)}`;
         }
     });
 
     progressBar.addEventListener('click', (e) => {
-        const rect = progressBar.getBoundingClientRect();
-        audio.currentTime = ((e.clientX - rect.left) / rect.width) * audio.duration;
+        if (audio.duration && isFinite(audio.duration)) {
+            const rect = progressBar.getBoundingClientRect();
+            audio.currentTime = ((e.clientX - rect.left) / rect.width) * audio.duration;
+        }
+    });
+
+    volumeSlider.addEventListener('input', () => {
+        audio.volume = parseFloat(volumeSlider.value);
     });
 }
 
@@ -278,33 +340,89 @@ function renderImageViewer(container, item) {
 
 function renderEbookViewer(container, item) {
     const token = getToken();
-    const ext = item.file_path?.split('.').pop()?.toLowerCase();
+    const format = (item.metadata_json?.format || '').toLowerCase();
+    const fileUrl = `/api/stream/file/${item.id}?token=${token}`;
+
+    let viewerContent = '';
+
+    if (format === 'pdf') {
+        // Use browser's native PDF viewer via object/embed with fallback
+        viewerContent = `
+            <div class="ebook-viewer" id="pdf-viewer-container">
+                <object data="${fileUrl}" type="application/pdf" width="100%" style="height:80vh;border-radius:var(--radius)">
+                    <embed src="${fileUrl}" type="application/pdf" width="100%" style="height:80vh">
+                        <p style="padding:2rem;text-align:center">
+                            浏览器不支持内嵌PDF预览。
+                            <a href="${fileUrl}" class="btn" style="margin-top:1rem" target="_blank">在新标签打开PDF</a>
+                        </p>
+                    </embed>
+                </object>
+            </div>
+        `;
+    } else if (format === 'epub') {
+        viewerContent = `
+            <div class="ebook-viewer" id="epub-viewer">
+                <div style="padding:2rem;text-align:center">
+                    <div class="loading"><div class="spinner"></div></div>
+                    <p style="margin-top:1rem">正在加载EPUB...</p>
+                </div>
+            </div>
+        `;
+    } else {
+        viewerContent = `
+            <div class="ebook-viewer">
+                <div style="padding:2rem;text-align:center">
+                    <p style="font-size:1.1rem;margin-bottom:1rem">${format.toUpperCase()} 格式电子书</p>
+                    <p style="color:var(--text-secondary)">此格式暂不支持在线预览，请下载后使用专用阅读器打开</p>
+                    <a href="${fileUrl}" class="btn" style="margin-top:1.5rem" download>下载文件 (${formatFileSize(item.file_size)})</a>
+                </div>
+            </div>
+        `;
+    }
 
     container.innerHTML = `
         <div class="player-container">
             <div class="player-back">
                 <a href="#/browse" class="btn btn-outline btn-sm">&larr; 返回</a>
+                ${format === 'pdf' ? `<a href="${fileUrl}" target="_blank" class="btn btn-outline btn-sm" style="margin-left:0.5rem">在新标签打开</a>` : ''}
             </div>
             <div class="player-info" style="margin-bottom:1rem">
                 <h2>${escapeHtml(item.title)}</h2>
                 <p style="color:var(--text-secondary)">
-                    ${item.year ? item.year + ' · ' : ''}${ext?.toUpperCase()} · ${formatFileSize(item.file_size)}
+                    ${item.year ? item.year + ' · ' : ''}${format.toUpperCase()} · ${formatFileSize(item.file_size)}
+                    ${item.metadata_json?.pages && item.metadata_json.pages !== 'unknown' ? ' · ' + item.metadata_json.pages + ' 页' : ''}
                 </p>
             </div>
-            <div class="ebook-viewer">
-                ${ext === 'pdf'
-                    ? `<iframe src="/api/stream/file/${item.id}?token=${token}#toolbar=1"></iframe>`
-                    : `<div style="padding:2rem;text-align:center">
-                        <p>此格式需要下载阅读</p>
-                        <a href="/api/stream/file/${item.id}?token=${token}" class="btn" style="margin-top:1rem" download>下载文件</a>
-                      </div>`
-                }
-            </div>
+            ${viewerContent}
         </div>
     `;
+
+    if (format === 'epub') {
+        loadEpub(fileUrl);
+    }
+}
+
+async function loadEpub(fileUrl) {
+    const viewer = document.getElementById('epub-viewer');
+    try {
+        const res = await fetch(fileUrl);
+        if (!res.ok) throw new Error('fetch failed');
+
+        viewer.innerHTML = `
+            <div style="padding:2rem;text-align:center">
+                <p style="margin-bottom:1rem">EPUB 文件已加载</p>
+                <p style="color:var(--text-secondary);margin-bottom:1.5rem">由于浏览器限制，EPUB需使用专用阅读器。</p>
+                <a href="${fileUrl}" class="btn" download>下载 EPUB</a>
+                <a href="${fileUrl}" class="btn btn-outline" style="margin-left:0.5rem" target="_blank">尝试打开</a>
+            </div>
+        `;
+    } catch (e) {
+        viewer.innerHTML = `<p class="error-msg" style="padding:2rem">加载失败</p>`;
+    }
 }
 
 function formatDuration(seconds) {
+    if (!seconds || !isFinite(seconds)) return '0:00';
     const h = Math.floor(seconds / 3600);
     const m = Math.floor((seconds % 3600) / 60);
     const s = Math.floor(seconds % 60);

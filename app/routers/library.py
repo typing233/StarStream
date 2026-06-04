@@ -1,5 +1,6 @@
 import os
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -9,6 +10,36 @@ from app.auth import get_current_user
 from app.services.scanner import scan_library
 
 router = APIRouter(prefix="/api/libraries", tags=["libraries"])
+
+HOME_DIR = str(Path.home())
+
+
+@router.get("/browse")
+def browse_directories(
+    path: str = Query(default=""),
+    user: User = Depends(get_current_user),
+):
+    if not path:
+        path = HOME_DIR
+
+    path = os.path.realpath(path)
+    if not os.path.isdir(path):
+        raise HTTPException(status_code=400, detail="Path is not a directory")
+
+    dirs = []
+    try:
+        for entry in sorted(os.scandir(path), key=lambda e: e.name.lower()):
+            if entry.is_dir() and not entry.name.startswith('.'):
+                dirs.append({"name": entry.name, "path": entry.path})
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="No permission to read this directory")
+
+    parent = os.path.dirname(path) if path != "/" else None
+    return {
+        "current": path,
+        "parent": parent,
+        "directories": dirs,
+    }
 
 
 class LibraryCreate(BaseModel):

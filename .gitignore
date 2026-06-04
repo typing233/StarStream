@@ -16,4 +16,4 @@ node_modules/
 playwright-report/
 test-results/
 
-1-1.png
+1-*.png
