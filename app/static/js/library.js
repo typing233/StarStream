@@ -49,7 +49,7 @@ async function browseTo(path) {
 
     try {
         const params = path ? `?path=${encodeURIComponent(path)}` : '';
-        const res = await api(`/api/libraries/browse${params}`);
+        const res = await api(`/api/v1/libraries/browse${params}`);
         const data = await res.json();
         if (!res.ok) {
             listEl.innerHTML = `<p class="error-msg">${data.detail || '无法访问'}</p>`;
@@ -113,7 +113,7 @@ async function addLibrary() {
     const finalName = document.getElementById('lib-name').value.trim() || 'Media';
 
     try {
-        const res = await api('/api/libraries', {
+        const res = await api('/api/v1/libraries', {
             method: 'POST',
             body: JSON.stringify({ name: finalName, path }),
         });
@@ -140,7 +140,7 @@ async function addLibrary() {
 async function loadLibraries() {
     const listEl = document.getElementById('library-list');
     try {
-        const res = await api('/api/libraries');
+        const res = await api('/api/v1/libraries');
         const libraries = await res.json();
         if (libraries.length === 0) {
             listEl.innerHTML = `<div class="empty-state"><div class="empty-icon">📁</div><p>还没有添加媒体目录<br>请在上方浏览并选择一个目录</p></div>`;
@@ -164,13 +164,13 @@ async function loadLibraries() {
 }
 
 window._rescanLib = async function(id) {
-    await api(`/api/libraries/${id}/scan`, { method: 'POST' });
+    await api(`/api/v1/libraries/${id}/scan`, { method: 'POST' });
     loadLibraries();
 };
 
 window._deleteLib = async function(id) {
     if (!confirm('确定删除此目录？所有相关媒体记录将被清除。')) return;
-    await api(`/api/libraries/${id}`, { method: 'DELETE' });
+    await api(`/api/v1/libraries/${id}`, { method: 'DELETE' });
     loadLibraries();
 };
 

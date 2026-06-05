@@ -1,4 +1,9 @@
 import { api, getToken } from './app.js';
+import { showToast } from './toast.js';
+import { showCastModal } from './cast-ui.js';
+
+let playStartTime = 0;
+let currentMediaId = null;
 
 export async function renderPlayer(container, mediaId) {
     if (!mediaId) {
@@ -6,10 +11,12 @@ export async function renderPlayer(container, mediaId) {
         return;
     }
 
+    currentMediaId = parseInt(mediaId);
+    playStartTime = Date.now();
     container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
 
     try {
-        const res = await api(`/api/media/${mediaId}`);
+        const res = await api(`/api/v1/media/${mediaId}`);
         if (!res.ok) {
             container.innerHTML = '<p class="error-msg">媒体不存在</p>';
             return;
@@ -37,11 +44,23 @@ export async function renderPlayer(container, mediaId) {
     }
 }
 
+function reportPlayActivity(mediaId, durationWatched, completed = false) {
+    try {
+        api('/api/v1/activity/play', {
+            method: 'POST',
+            body: JSON.stringify({
+                media_id: mediaId,
+                duration_watched: Math.round(durationWatched),
+                completed,
+            }),
+        });
+    } catch (e) {}
+}
+
 function renderVideoPlayer(container, item) {
     const token = getToken();
-    const streamUrl = `/api/stream/file/${item.id}?token=${token}`;
+    const streamUrl = `/api/v1/stream/file/${item.id}?token=${token}`;
 
-    // Pick a default transcode resolution based on source resolution
     const srcRes = item.metadata_json?.resolution || '';
     let autoResolution = '720p';
     if (srcRes) {
@@ -55,6 +74,7 @@ function renderVideoPlayer(container, item) {
         <div class="player-container">
             <div class="player-back">
                 <a href="#/browse" class="btn btn-outline btn-sm">&larr; 返回</a>
+                <button class="btn btn-sm btn-outline" id="cast-btn" style="margin-left:0.5rem">📺 投屏</button>
             </div>
             <div class="video-wrapper">
                 <video id="video-el" preload="metadata"></video>
@@ -99,6 +119,9 @@ function renderVideoPlayer(container, item) {
                 </div>
                 <div id="track-status" style="margin-top:0.5rem;font-size:0.8rem;color:var(--success)" class="hidden"></div>
             </div>
+            <div class="keyboard-hints">
+                <span>空格:播放/暂停</span> <span>←→:快进退5s</span> <span>↑↓:音量</span> <span>F:全屏</span> <span>M:静音</span>
+            </div>
         </div>
     `;
 
@@ -114,13 +137,15 @@ function renderVideoPlayer(container, item) {
     let currentResolution = 'original';
     let currentAudioTrack = 0;
     let totalDuration = item.duration || 0;
-    let transcodeStartTime = 0; // the wall-clock offset we passed to ffmpeg
+    let transcodeStartTime = 0;
 
     video.src = streamUrl;
 
+    document.getElementById('cast-btn').addEventListener('click', () => showCastModal(item.id));
+
     function buildTranscodeUrl(seekTime) {
         const res = currentResolution === 'original' ? autoResolution : currentResolution;
-        let url = `/api/stream/transcode/${item.id}?resolution=${res}&audio_track=${currentAudioTrack}&token=${token}`;
+        let url = `/api/v1/stream/transcode/${item.id}?resolution=${res}&audio_track=${currentAudioTrack}&token=${token}`;
         if (seekTime > 0) url += `&start_time=${seekTime.toFixed(2)}`;
         return url;
     }
@@ -138,9 +163,7 @@ function renderVideoPlayer(container, item) {
 
     function reloadWithSettings() {
         const seekTime = getEffectiveTime();
-
         if (currentResolution === 'original' && currentAudioTrack === 0) {
-            // Back to raw file streaming
             transcodeStartTime = 0;
             video.src = streamUrl;
             video.load();
@@ -155,7 +178,6 @@ function renderVideoPlayer(container, item) {
     }
 
     function getEffectiveTime() {
-        // In transcode mode, real position = transcodeStartTime + video.currentTime
         if (transcodeStartTime > 0) {
             return transcodeStartTime + (video.currentTime || 0);
         }
@@ -186,6 +208,10 @@ function renderVideoPlayer(container, item) {
         }
     });
 
+    video.addEventListener('ended', () => {
+        reportPlayActivity(item.id, getEffectiveTime(), true);
+    });
+
     progressBar.addEventListener('click', (e) => {
         const dur = totalDuration || item.duration || 0;
         if (dur <= 0) return;
@@ -196,7 +222,6 @@ function renderVideoPlayer(container, item) {
         if (currentResolution === 'original' && currentAudioTrack === 0) {
             video.currentTime = seekTime;
         } else {
-            // For transcode mode, restart transcode at new position
             switchToTranscode(seekTime);
         }
     });
@@ -216,10 +241,59 @@ function renderVideoPlayer(container, item) {
         reloadWithSettings();
     });
 
+    // Keyboard shortcuts
+    function handleKeyboard(e) {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+        switch (e.key) {
+            case ' ':
+                e.preventDefault();
+                if (video.paused) video.play(); else video.pause();
+                break;
+            case 'ArrowLeft':
+                e.preventDefault();
+                if (currentResolution === 'original' && currentAudioTrack === 0) {
+                    video.currentTime = Math.max(0, video.currentTime - 5);
+                }
+                break;
+            case 'ArrowRight':
+                e.preventDefault();
+                if (currentResolution === 'original' && currentAudioTrack === 0) {
+                    video.currentTime = Math.min(video.duration || 0, video.currentTime + 5);
+                }
+                break;
+            case 'ArrowUp':
+                e.preventDefault();
+                video.volume = Math.min(1, video.volume + 0.1);
+                volumeSlider.value = video.volume;
+                break;
+            case 'ArrowDown':
+                e.preventDefault();
+                video.volume = Math.max(0, video.volume - 0.1);
+                volumeSlider.value = video.volume;
+                break;
+            case 'f': case 'F':
+                if (document.fullscreenElement) document.exitFullscreen();
+                else document.querySelector('.video-wrapper')?.requestFullscreen();
+                break;
+            case 'm': case 'M':
+                video.muted = !video.muted;
+                break;
+        }
+    }
+    document.addEventListener('keydown', handleKeyboard);
+
+    // Clean up on page change
+    const cleanup = () => {
+        document.removeEventListener('keydown', handleKeyboard);
+        window.removeEventListener('hashchange', cleanup);
+        const watched = getEffectiveTime();
+        if (watched > 5) reportPlayActivity(item.id, watched, false);
+    };
+    window.addEventListener('hashchange', cleanup);
+
     loadTracksForVideo(item.id, token, (audioIdx) => {
         currentAudioTrack = audioIdx;
         showTrackStatus(`正在切换到音轨 ${audioIdx + 1}...`);
-        // Audio track switch always uses transcode — switch immediately
         const seekTime = getEffectiveTime();
         switchToTranscode(seekTime);
         showTrackStatus(`已切换音轨 ${audioIdx + 1}`);
@@ -237,7 +311,7 @@ function showTrackStatus(msg) {
 
 async function loadTracksForVideo(mediaId, token, onAudioChange) {
     try {
-        const res = await fetch(`/api/stream/tracks/${mediaId}?token=${token}`);
+        const res = await fetch(`/api/v1/stream/tracks/${mediaId}?token=${token}`);
         if (!res.ok) return;
         const tracks = await res.json();
 
@@ -248,10 +322,7 @@ async function loadTracksForVideo(mediaId, token, onAudioChange) {
             select.innerHTML = tracks.audio_tracks.map((t, i) =>
                 `<option value="${i}">${t.title} [${t.language}] (${t.codec}, ${t.channels}ch)</option>`
             ).join('');
-
-            select.addEventListener('change', () => {
-                onAudioChange(parseInt(select.value));
-            });
+            select.addEventListener('change', () => onAudioChange(parseInt(select.value)));
         }
 
         if (tracks.subtitle_tracks && tracks.subtitle_tracks.length > 0) {
@@ -265,40 +336,27 @@ async function loadTracksForVideo(mediaId, token, onAudioChange) {
 
             select.addEventListener('change', () => {
                 const video = document.getElementById('video-el');
-                // Remove all existing text tracks
-                while (video.querySelector('track')) {
-                    video.querySelector('track').remove();
-                }
-                // Clear existing textTracks display
-                for (let i = 0; i < video.textTracks.length; i++) {
-                    video.textTracks[i].mode = 'disabled';
-                }
+                while (video.querySelector('track')) video.querySelector('track').remove();
+                for (let i = 0; i < video.textTracks.length; i++) video.textTracks[i].mode = 'disabled';
 
                 if (select.value) {
                     const trackEl = document.createElement('track');
                     trackEl.kind = 'subtitles';
                     trackEl.label = select.options[select.selectedIndex].text;
                     trackEl.srclang = 'und';
-                    trackEl.src = `/api/stream/subtitle/${mediaId}/${select.value}?token=${token}`;
+                    trackEl.src = `/api/v1/stream/subtitle/${mediaId}/${select.value}?token=${token}`;
                     trackEl.default = true;
                     video.appendChild(trackEl);
-
-                    // Force the new track to show
                     setTimeout(() => {
-                        if (video.textTracks.length > 0) {
-                            video.textTracks[video.textTracks.length - 1].mode = 'showing';
-                        }
+                        if (video.textTracks.length > 0) video.textTracks[video.textTracks.length - 1].mode = 'showing';
                     }, 100);
-
                     showTrackStatus(`字幕已开启: ${select.options[select.selectedIndex].text}`);
                 } else {
                     showTrackStatus('字幕已关闭');
                 }
             });
         }
-    } catch (e) {
-        console.error('Failed to load tracks:', e);
-    }
+    } catch (e) {}
 }
 
 function renderAudioPlayer(container, item) {
@@ -307,11 +365,12 @@ function renderAudioPlayer(container, item) {
         <div class="player-container">
             <div class="player-back">
                 <a href="#/browse" class="btn btn-outline btn-sm">&larr; 返回</a>
+                <button class="btn btn-sm btn-outline" id="cast-btn" style="margin-left:0.5rem">📺 投屏</button>
             </div>
             <div class="audio-player">
                 <div class="audio-cover">
                     ${item.cover_path
-                        ? `<img src="/api/stream/thumbnail/${item.cover_path}" alt="">`
+                        ? `<img src="/api/v1/stream/thumbnail/${item.cover_path}" alt="">`
                         : `<span style="font-size:5rem">🎵</span>`
                     }
                 </div>
@@ -321,7 +380,7 @@ function renderAudioPlayer(container, item) {
                     ${item.metadata_json?.album && item.metadata_json.album !== 'unknown' ? ' · ' + item.metadata_json.album : ''}
                     ${item.year ? ' · ' + item.year : ''}
                 </p>
-                <audio id="audio-el" preload="metadata" src="/api/stream/file/${item.id}?token=${token}"></audio>
+                <audio id="audio-el" preload="metadata" src="/api/v1/stream/file/${item.id}?token=${token}"></audio>
                 <div class="player-controls" style="margin-top:1.5rem;max-width:500px;margin-left:auto;margin-right:auto">
                     <button id="play-btn" class="btn btn-sm">▶</button>
                     <div class="progress-bar" id="progress-bar">
@@ -341,6 +400,8 @@ function renderAudioPlayer(container, item) {
     const timeDisplay = document.getElementById('time-display');
     const volumeSlider = document.getElementById('volume-slider');
 
+    document.getElementById('cast-btn').addEventListener('click', () => showCastModal(item.id));
+
     playBtn.addEventListener('click', () => {
         if (audio.paused) { audio.play(); playBtn.textContent = '⏸'; }
         else { audio.pause(); playBtn.textContent = '▶'; }
@@ -356,6 +417,10 @@ function renderAudioPlayer(container, item) {
         }
     });
 
+    audio.addEventListener('ended', () => {
+        reportPlayActivity(item.id, audio.duration || 0, true);
+    });
+
     progressBar.addEventListener('click', (e) => {
         if (audio.duration && isFinite(audio.duration)) {
             const rect = progressBar.getBoundingClientRect();
@@ -363,9 +428,30 @@ function renderAudioPlayer(container, item) {
         }
     });
 
-    volumeSlider.addEventListener('input', () => {
-        audio.volume = parseFloat(volumeSlider.value);
-    });
+    volumeSlider.addEventListener('input', () => { audio.volume = parseFloat(volumeSlider.value); });
+
+    // Keyboard
+    function handleKeyboard(e) {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+        switch (e.key) {
+            case ' ':
+                e.preventDefault();
+                if (audio.paused) audio.play(); else audio.pause();
+                break;
+            case 'ArrowLeft': e.preventDefault(); audio.currentTime = Math.max(0, audio.currentTime - 5); break;
+            case 'ArrowRight': e.preventDefault(); audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 5); break;
+            case 'ArrowUp': e.preventDefault(); audio.volume = Math.min(1, audio.volume + 0.1); volumeSlider.value = audio.volume; break;
+            case 'ArrowDown': e.preventDefault(); audio.volume = Math.max(0, audio.volume - 0.1); volumeSlider.value = audio.volume; break;
+            case 'm': case 'M': audio.muted = !audio.muted; break;
+        }
+    }
+    document.addEventListener('keydown', handleKeyboard);
+    const cleanup = () => {
+        document.removeEventListener('keydown', handleKeyboard);
+        window.removeEventListener('hashchange', cleanup);
+        if (audio.currentTime > 5) reportPlayActivity(item.id, audio.currentTime, false);
+    };
+    window.addEventListener('hashchange', cleanup);
 }
 
 function renderImageViewer(container, item) {
@@ -376,7 +462,7 @@ function renderImageViewer(container, item) {
                 <a href="#/browse" class="btn btn-outline btn-sm">&larr; 返回</a>
             </div>
             <div class="image-viewer">
-                <img src="/api/stream/file/${item.id}?token=${token}" alt="${escapeHtml(item.title)}">
+                <img src="/api/v1/stream/file/${item.id}?token=${token}" alt="${escapeHtml(item.title)}">
             </div>
             <div class="player-info">
                 <h2>${escapeHtml(item.title)}</h2>
@@ -391,12 +477,10 @@ function renderImageViewer(container, item) {
 function renderEbookViewer(container, item) {
     const token = getToken();
     const format = (item.metadata_json?.format || '').toLowerCase();
-    const fileUrl = `/api/stream/file/${item.id}?token=${token}`;
+    const fileUrl = `/api/v1/stream/file/${item.id}?token=${token}`;
 
     let viewerContent = '';
-
     if (format === 'pdf') {
-        // Use browser's native PDF viewer via object/embed with fallback
         viewerContent = `
             <div class="ebook-viewer" id="pdf-viewer-container">
                 <object data="${fileUrl}" type="application/pdf" width="100%" style="height:80vh;border-radius:var(--radius)">
@@ -413,8 +497,9 @@ function renderEbookViewer(container, item) {
         viewerContent = `
             <div class="ebook-viewer" id="epub-viewer">
                 <div style="padding:2rem;text-align:center">
-                    <div class="loading"><div class="spinner"></div></div>
-                    <p style="margin-top:1rem">正在加载EPUB...</p>
+                    <p style="margin-bottom:1rem">EPUB 文件</p>
+                    <p style="color:var(--text-secondary);margin-bottom:1.5rem">由于浏览器限制，EPUB需使用专用阅读器。</p>
+                    <a href="${fileUrl}" class="btn" download>下载 EPUB</a>
                 </div>
             </div>
         `;
@@ -423,7 +508,7 @@ function renderEbookViewer(container, item) {
             <div class="ebook-viewer">
                 <div style="padding:2rem;text-align:center">
                     <p style="font-size:1.1rem;margin-bottom:1rem">${format.toUpperCase()} 格式电子书</p>
-                    <p style="color:var(--text-secondary)">此格式暂不支持在线预览，请下载后使用专用阅读器打开</p>
+                    <p style="color:var(--text-secondary)">此格式暂不支持在线预览</p>
                     <a href="${fileUrl}" class="btn" style="margin-top:1.5rem" download>下载文件 (${formatFileSize(item.file_size)})</a>
                 </div>
             </div>
@@ -446,29 +531,6 @@ function renderEbookViewer(container, item) {
             ${viewerContent}
         </div>
     `;
-
-    if (format === 'epub') {
-        loadEpub(fileUrl);
-    }
-}
-
-async function loadEpub(fileUrl) {
-    const viewer = document.getElementById('epub-viewer');
-    try {
-        const res = await fetch(fileUrl);
-        if (!res.ok) throw new Error('fetch failed');
-
-        viewer.innerHTML = `
-            <div style="padding:2rem;text-align:center">
-                <p style="margin-bottom:1rem">EPUB 文件已加载</p>
-                <p style="color:var(--text-secondary);margin-bottom:1.5rem">由于浏览器限制，EPUB需使用专用阅读器。</p>
-                <a href="${fileUrl}" class="btn" download>下载 EPUB</a>
-                <a href="${fileUrl}" class="btn btn-outline" style="margin-left:0.5rem" target="_blank">尝试打开</a>
-            </div>
-        `;
-    } catch (e) {
-        viewer.innerHTML = `<p class="error-msg" style="padding:2rem">加载失败</p>`;
-    }
 }
 
 function formatDuration(seconds) {

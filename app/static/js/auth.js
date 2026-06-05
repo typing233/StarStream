@@ -35,7 +35,7 @@ export function renderAuth(container) {
             return;
         }
         try {
-            const res = await fetch(`/api/auth/${endpoint}`, {
+            const res = await fetch(`/api/v1/auth/${endpoint}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username, password }),
@@ -45,7 +45,7 @@ export function renderAuth(container) {
                 showError(data.detail || '操作失败');
                 return;
             }
-            setAuth(data.token, data.username);
+            setAuth(data.token, data.username, data.role);
             navigate('browse');
         } catch (e) {
             showError('网络错误');

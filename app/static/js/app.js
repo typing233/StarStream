@@ -2,27 +2,34 @@ import { renderAuth } from './auth.js';
 import { renderLibrary } from './library.js';
 import { renderBrowse } from './browse.js';
 import { renderPlayer } from './player.js';
+import { renderAdmin } from './admin.js';
 
 const state = {
     token: localStorage.getItem('starstream_token'),
     username: localStorage.getItem('starstream_username'),
+    role: localStorage.getItem('starstream_role'),
 };
 
 export function getToken() { return state.token; }
 export function getUsername() { return state.username; }
+export function getRole() { return state.role; }
 
-export function setAuth(token, username) {
+export function setAuth(token, username, role) {
     state.token = token;
     state.username = username;
+    state.role = role;
     localStorage.setItem('starstream_token', token);
     localStorage.setItem('starstream_username', username);
+    localStorage.setItem('starstream_role', role);
 }
 
 export function logout() {
     state.token = null;
     state.username = null;
+    state.role = null;
     localStorage.removeItem('starstream_token');
     localStorage.removeItem('starstream_username');
+    localStorage.removeItem('starstream_role');
     navigate('login');
 }
 
@@ -62,6 +69,14 @@ function router() {
     if (state.token) {
         navbar.classList.remove('hidden');
         document.getElementById('username-display').textContent = state.username;
+
+        const adminLink = document.getElementById('admin-link');
+        if (state.role === 'admin') {
+            adminLink.classList.remove('hidden');
+        } else {
+            adminLink.classList.add('hidden');
+        }
+
         document.querySelectorAll('.nav-link').forEach(link => {
             link.classList.toggle('active', link.dataset.page === page);
         });
@@ -80,6 +95,13 @@ function router() {
             break;
         case 'play':
             renderPlayer(content, id);
+            break;
+        case 'admin':
+            if (state.role === 'admin') {
+                renderAdmin(content);
+            } else {
+                renderBrowse(content);
+            }
             break;
         default:
             renderBrowse(content);

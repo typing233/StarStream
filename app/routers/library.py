@@ -1,4 +1,5 @@
 import os
+import math
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from pydantic import BaseModel
@@ -9,7 +10,7 @@ from app.models import User, Library
 from app.auth import get_current_user
 from app.services.scanner import scan_library
 
-router = APIRouter(prefix="/api/libraries", tags=["libraries"])
+router = APIRouter(prefix="/api/v1/libraries", tags=["libraries"])
 
 HOME_DIR = str(Path.home())
 
@@ -51,20 +52,27 @@ class LibraryResponse(BaseModel):
     id: int
     name: str
     path: str
+    owner_id: int
+    owner_name: str | None = None
     last_scanned: str | None
 
     class Config:
         from_attributes = True
 
 
-@router.get("", response_model=list[LibraryResponse])
+@router.get("")
 def list_libraries(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    libs = db.query(Library).filter(Library.owner_id == user.id).all()
+    if user.role == "admin":
+        libs = db.query(Library).all()
+    else:
+        libs = db.query(Library).filter(Library.owner_id == user.id).all()
     return [
         LibraryResponse(
             id=lib.id,
             name=lib.name,
             path=lib.path,
+            owner_id=lib.owner_id,
+            owner_name=lib.owner.username if lib.owner else None,
             last_scanned=lib.last_scanned.isoformat() if lib.last_scanned else None,
         )
         for lib in libs
@@ -91,7 +99,10 @@ def create_library(
 
     background_tasks.add_task(_scan_in_background, lib.id)
 
-    return LibraryResponse(id=lib.id, name=lib.name, path=lib.path, last_scanned=None)
+    return LibraryResponse(
+        id=lib.id, name=lib.name, path=lib.path,
+        owner_id=lib.owner_id, owner_name=user.username, last_scanned=None
+    )
 
 
 @router.post("/{library_id}/scan")
@@ -101,7 +112,10 @@ def rescan_library(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    lib = db.query(Library).filter(Library.id == library_id, Library.owner_id == user.id).first()
+    query = db.query(Library).filter(Library.id == library_id)
+    if user.role != "admin":
+        query = query.filter(Library.owner_id == user.id)
+    lib = query.first()
     if not lib:
         raise HTTPException(status_code=404, detail="Library not found")
     background_tasks.add_task(_scan_in_background, lib.id)
@@ -114,7 +128,10 @@ def delete_library(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    lib = db.query(Library).filter(Library.id == library_id, Library.owner_id == user.id).first()
+    query = db.query(Library).filter(Library.id == library_id)
+    if user.role != "admin":
+        query = query.filter(Library.owner_id == user.id)
+    lib = query.first()
     if not lib:
         raise HTTPException(status_code=404, detail="Library not found")
     db.delete(lib)

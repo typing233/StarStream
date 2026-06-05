@@ -3,7 +3,7 @@ import mimetypes
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
-from fastapi.responses import StreamingResponse, FileResponse, Response
+from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -14,7 +14,7 @@ from app.services.transcoder import (
     get_video_streams, transcode_stream, extract_subtitle, RESOLUTION_PRESETS,
 )
 
-router = APIRouter(prefix="/api/stream", tags=["stream"])
+router = APIRouter(prefix="/api/v1/stream", tags=["stream"])
 
 
 @router.get("/file/{media_id}")
@@ -24,7 +24,7 @@ async def stream_file(
     user: User = Depends(get_current_user_from_token_param),
     db: Session = Depends(get_db),
 ):
-    item = _get_user_media(media_id, user, db)
+    item = _get_media(media_id, db)
     file_path = item.file_path
 
     if not os.path.isfile(file_path):
@@ -85,7 +85,7 @@ async def transcode_file(
     user: User = Depends(get_current_user_from_token_param),
     db: Session = Depends(get_db),
 ):
-    item = _get_user_media(media_id, user, db)
+    item = _get_media(media_id, db)
     if item.media_type != "video":
         raise HTTPException(status_code=400, detail="Transcoding only for video")
     if resolution not in RESOLUTION_PRESETS:
@@ -106,7 +106,7 @@ def get_tracks(
     user: User = Depends(get_current_user_from_token_param),
     db: Session = Depends(get_db),
 ):
-    item = _get_user_media(media_id, user, db)
+    item = _get_media(media_id, db)
     if item.media_type != "video":
         raise HTTPException(status_code=400, detail="Only video has tracks")
     return get_video_streams(item.file_path)
@@ -119,7 +119,7 @@ def get_subtitle(
     user: User = Depends(get_current_user_from_token_param),
     db: Session = Depends(get_db),
 ):
-    item = _get_user_media(media_id, user, db)
+    item = _get_media(media_id, db)
     vtt_path = extract_subtitle(item.file_path, stream_index)
     if not vtt_path:
         raise HTTPException(status_code=404, detail="Could not extract subtitle")
@@ -135,13 +135,8 @@ def get_thumbnail(filename: str):
     return FileResponse(str(thumb_path), media_type="image/jpeg")
 
 
-def _get_user_media(media_id: int, user: User, db: Session) -> MediaItem:
-    user_library_ids = [
-        lib.id for lib in db.query(Library).filter(Library.owner_id == user.id).all()
-    ]
-    item = db.query(MediaItem).filter(
-        MediaItem.id == media_id, MediaItem.library_id.in_(user_library_ids)
-    ).first()
+def _get_media(media_id: int, db: Session) -> MediaItem:
+    item = db.query(MediaItem).filter(MediaItem.id == media_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Media not found")
     return item
