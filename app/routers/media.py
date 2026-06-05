@@ -11,6 +11,12 @@ from app.schemas import MediaResponse
 router = APIRouter(prefix="/api/v1/media", tags=["media"])
 
 
+def _accessible_library_ids(user: User, db: Session) -> list[int]:
+    if user.role == "admin":
+        return [lib.id for lib in db.query(Library).all()]
+    return [lib.id for lib in db.query(Library).filter(Library.owner_id == user.id).all()]
+
+
 @router.get("")
 def list_media(
     media_type: str | None = None,
@@ -24,19 +30,22 @@ def list_media(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    all_library_ids = [lib.id for lib in db.query(Library).all()]
-    if not all_library_ids:
+    lib_ids = _accessible_library_ids(user, db)
+
+    if library_id:
+        if library_id not in lib_ids:
+            raise HTTPException(status_code=403, detail="Access denied to this library")
+
+    if not lib_ids:
         return {"items": [], "total": 0, "page": page, "per_page": per_page, "total_pages": 0}
 
-    query = db.query(MediaItem).filter(MediaItem.library_id.in_(all_library_ids))
+    query = db.query(MediaItem).filter(MediaItem.library_id.in_(lib_ids))
 
     if media_type:
         query = query.filter(MediaItem.media_type == media_type)
     if year:
         query = query.filter(MediaItem.year == year)
     if library_id:
-        if library_id not in all_library_ids:
-            raise HTTPException(status_code=403, detail="Library not found")
         query = query.filter(MediaItem.library_id == library_id)
     if search:
         query = query.filter(MediaItem.title.ilike(f"%{search}%"))
@@ -63,11 +72,11 @@ def list_media(
 
 @router.get("/stats")
 def media_stats(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    all_library_ids = [lib.id for lib in db.query(Library).all()]
-    if not all_library_ids:
+    lib_ids = _accessible_library_ids(user, db)
+    if not lib_ids:
         return {"video": 0, "audio": 0, "image": 0, "ebook": 0, "total": 0}
 
-    items = db.query(MediaItem).filter(MediaItem.library_id.in_(all_library_ids)).all()
+    items = db.query(MediaItem).filter(MediaItem.library_id.in_(lib_ids)).all()
     stats = {"video": 0, "audio": 0, "image": 0, "ebook": 0, "total": len(items)}
     for item in items:
         if item.media_type in stats:
@@ -77,7 +86,11 @@ def media_stats(user: User = Depends(get_current_user), db: Session = Depends(ge
 
 @router.get("/{media_id}", response_model=MediaResponse)
 def get_media(media_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    item = db.query(MediaItem).filter(MediaItem.id == media_id).first()
+    lib_ids = _accessible_library_ids(user, db)
+    item = db.query(MediaItem).filter(
+        MediaItem.id == media_id,
+        MediaItem.library_id.in_(lib_ids),
+    ).first()
     if not item:
         raise HTTPException(status_code=404, detail="Media not found")
     return item

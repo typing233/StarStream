@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import User, MediaItem
+from app.models import User, MediaItem, Library
 from app.auth import get_current_user
 from app.config import settings
 from app.services.cast_service import cast_manager
@@ -20,6 +20,12 @@ class ControlRequest(BaseModel):
     device_id: str
     action: str
     seek_position: float | None = None
+
+
+def _accessible_library_ids(user: User, db: Session) -> list[int]:
+    if user.role == "admin":
+        return [lib.id for lib in db.query(Library).all()]
+    return [lib.id for lib in db.query(Library).filter(Library.owner_id == user.id).all()]
 
 
 @router.get("/devices")
@@ -40,7 +46,11 @@ async def cast_play(
             detail="base_url not configured. Set STARSTREAM_BASE_URL for casting to work."
         )
 
-    item = db.query(MediaItem).filter(MediaItem.id == req.media_id).first()
+    lib_ids = _accessible_library_ids(user, db)
+    item = db.query(MediaItem).filter(
+        MediaItem.id == req.media_id,
+        MediaItem.library_id.in_(lib_ids),
+    ).first()
     if not item:
         raise HTTPException(status_code=404, detail="Media not found")
 
