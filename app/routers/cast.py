@@ -40,12 +40,6 @@ async def cast_play(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if not settings.base_url:
-        raise HTTPException(
-            status_code=400,
-            detail="base_url not configured. Set STARSTREAM_BASE_URL for casting to work."
-        )
-
     lib_ids = _accessible_library_ids(user, db)
     item = db.query(MediaItem).filter(
         MediaItem.id == req.media_id,
@@ -53,6 +47,12 @@ async def cast_play(
     ).first()
     if not item:
         raise HTTPException(status_code=404, detail="Media not found")
+
+    if not settings.base_url:
+        raise HTTPException(
+            status_code=400,
+            detail="base_url not configured. Set STARSTREAM_BASE_URL for casting to work."
+        )
 
     from app.auth import create_access_token
     cast_token = create_access_token(user.id, user.role)
