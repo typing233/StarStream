@@ -141,7 +141,7 @@ const Player = {
         const token = App.token;
         container.innerHTML = `
             <div style="text-align:center;padding:40px 0">
-                <img src="/api/stream/${mediaId}/cover" alt="cover"
+                <img src="/api/stream/${mediaId}/cover?token=${token}" alt="cover"
                      style="width:250px;height:250px;object-fit:cover;border-radius:var(--radius);background:var(--bg-tertiary)"
                      onerror="this.style.display='none'">
             </div>
@@ -172,7 +172,7 @@ const Player = {
 
     renderEbook(container, mediaId, info) {
         const streamUrl = `/api/stream/${mediaId}?token=${App.token}`;
-        const ext = info.title.toLowerCase();
+        const ext = (info.file_ext || "").toLowerCase();
 
         container.innerHTML = `
             <div class="player-info"><h2>${info.title}</h2></div>
@@ -183,7 +183,9 @@ const Player = {
             </div>
         `;
 
-        if (typeof ePub !== "undefined" && !ext.endsWith(".pdf")) {
+        if (ext === ".pdf" && window.pdfjsLib) {
+            this.renderPdf(streamUrl);
+        } else if (typeof ePub !== "undefined" && ext === ".epub") {
             this.renderEpub(streamUrl);
         } else if (window.pdfjsLib) {
             this.renderPdf(streamUrl);

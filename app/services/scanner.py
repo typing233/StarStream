@@ -123,6 +123,69 @@ def extract_cover_image(file_path: str, media_id: str) -> str | None:
     return None
 
 
+def extract_cover_ebook(file_path: str, media_id: str) -> str | None:
+    cover_file = COVERS_DIR / f"{media_id}.jpg"
+    if cover_file.exists():
+        return str(cover_file)
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == ".epub":
+        return _extract_epub_cover(file_path, cover_file)
+    if ext == ".pdf":
+        return _extract_pdf_cover(file_path, cover_file)
+    return None
+
+
+def _extract_epub_cover(file_path: str, cover_file: Path) -> str | None:
+    import zipfile
+    try:
+        with zipfile.ZipFile(file_path, "r") as zf:
+            names = zf.namelist()
+            cover_candidates = [n for n in names if "cover" in n.lower() and n.lower().endswith((".jpg", ".jpeg", ".png"))]
+            if not cover_candidates:
+                cover_candidates = [n for n in names if n.lower().endswith((".jpg", ".jpeg", ".png"))]
+            if cover_candidates:
+                data = zf.read(cover_candidates[0])
+                from PIL import Image
+                import io
+                img = Image.open(io.BytesIO(data))
+                img.thumbnail((300, 400))
+                img.convert("RGB").save(str(cover_file), "JPEG", quality=80)
+                return str(cover_file)
+    except Exception:
+        pass
+    return None
+
+
+def _extract_pdf_cover(file_path: str, cover_file: Path) -> str | None:
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", file_path,
+                "-frames:v", "1", "-vf", "scale=300:-1",
+                str(cover_file),
+            ],
+            capture_output=True, timeout=30,
+        )
+        if cover_file.exists() and cover_file.stat().st_size > 0:
+            return str(cover_file)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    # Fallback: use pdftoppm if available
+    try:
+        ppm_prefix = str(cover_file).replace(".jpg", "")
+        subprocess.run(
+            ["pdftoppm", "-f", "1", "-l", "1", "-jpeg", "-scale-to", "300", file_path, ppm_prefix],
+            capture_output=True, timeout=30,
+        )
+        ppm_file = Path(ppm_prefix + "-1.jpg")
+        if ppm_file.exists():
+            ppm_file.rename(cover_file)
+            return str(cover_file)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return None
+
+
 def get_audio_subtitle_tracks(probe_data: dict) -> tuple[str | None, str | None]:
     audio_tracks = []
     subtitle_tracks = []
@@ -152,6 +215,56 @@ def get_audio_subtitle_tracks(probe_data: dict) -> tuple[str | None, str | None]
 
 def file_hash(path: str) -> str:
     return hashlib.md5(path.encode()).hexdigest()
+
+
+def generate_default_cover(media_id: str, title: str, media_type: str) -> str:
+    cover_file = COVERS_DIR / f"{media_id}.jpg"
+    if cover_file.exists():
+        return str(cover_file)
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        colors = {
+            "audio": (70, 50, 120),
+            "ebook": (40, 80, 60),
+            "video": (80, 40, 40),
+        }
+        bg = colors.get(media_type, (60, 60, 80))
+        img = Image.new("RGB", (300, 400), bg)
+        draw = ImageDraw.Draw(img)
+
+        icons = {"audio": "♫", "ebook": "PDF", "video": "▶"}
+        icon = icons.get(media_type, "?")
+        try:
+            font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
+            font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
+        except (OSError, IOError):
+            font_large = ImageFont.load_default()
+            font_small = font_large
+
+        draw.text((150, 140), icon, fill=(255, 255, 255, 200), font=font_large, anchor="mm")
+
+        display_title = title[:30] + "..." if len(title) > 30 else title
+        lines = []
+        while display_title:
+            if len(display_title) <= 16:
+                lines.append(display_title)
+                break
+            split = display_title[:16].rfind(" ")
+            if split <= 0:
+                split = 16
+            lines.append(display_title[:split])
+            display_title = display_title[split:].lstrip()
+
+        y = 220
+        for line in lines[:3]:
+            draw.text((150, y), line, fill=(220, 220, 220), font=font_small, anchor="mm")
+            y += 24
+
+        img.save(str(cover_file), "JPEG", quality=80)
+        return str(cover_file)
+    except Exception:
+        pass
+    return None
 
 
 def scan_library(library_id: int):
@@ -220,6 +333,8 @@ def scan_library(library_id: int):
                             if ym:
                                 year = int(ym.group(1))
                     cover = extract_cover_audio(full_path, mid)
+                    if not cover:
+                        cover = generate_default_cover(mid, title, "audio")
 
                 elif media_type == "image":
                     try:
@@ -229,6 +344,11 @@ def scan_library(library_id: int):
                     except Exception:
                         pass
                     cover = extract_cover_image(full_path, mid)
+
+                elif media_type == "ebook":
+                    cover = extract_cover_ebook(full_path, mid)
+                    if not cover:
+                        cover = generate_default_cover(mid, title, "ebook")
 
                 item = MediaItem(
                     library_id=library_id,

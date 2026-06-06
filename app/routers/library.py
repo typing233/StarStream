@@ -1,15 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List
 import os
+import shutil
 
+from app.config import DATA_DIR
 from app.database import get_db
 from app.models import User, Library, MediaItem
 from app.auth import get_current_user
 from app.services.scanner import scan_library
 
 router = APIRouter(prefix="/api/libraries", tags=["libraries"])
+
+UPLOADS_DIR = DATA_DIR / "uploads"
+UPLOADS_DIR.mkdir(exist_ok=True)
 
 
 class LibraryCreate(BaseModel):
@@ -109,3 +114,34 @@ def list_media(
         )
         for m in q.all()
     ]
+
+
+@router.post("/upload", response_model=LibraryResponse)
+async def upload_library(
+    name: str = Form(...),
+    files: List[UploadFile] = File(...),
+    background_tasks: BackgroundTasks = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    lib_dir = UPLOADS_DIR / f"user_{user.id}" / name.replace(" ", "_").replace("/", "_")
+    lib_dir.mkdir(parents=True, exist_ok=True)
+
+    for f in files:
+        rel_path = f.filename or "unnamed"
+        parts = rel_path.replace("\\", "/").split("/")
+        if len(parts) > 1:
+            sub_dir = lib_dir / "/".join(parts[:-1])
+            sub_dir.mkdir(parents=True, exist_ok=True)
+        dest = lib_dir / rel_path.replace("\\", "/")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with open(str(dest), "wb") as out:
+            content = await f.read()
+            out.write(content)
+
+    lib = Library(name=name, path=str(lib_dir), owner_id=user.id)
+    db.add(lib)
+    db.commit()
+    db.refresh(lib)
+    background_tasks.add_task(scan_library, lib.id)
+    return LibraryResponse(id=lib.id, name=lib.name, path=lib.path, media_count=0)

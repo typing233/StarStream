@@ -69,20 +69,21 @@ const Browse = {
                 grid.innerHTML = `<p style="color:var(--text-secondary)">No media found. Try rescanning the library.</p>`;
                 return;
             }
-            grid.innerHTML = items.map(item => `
+            grid.innerHTML = items.map(item => {
+                const icon = this.typeIcon(item.media_type);
+                return `
                 <div class="media-card" onclick="location.hash='#/play/${item.id}'">
                     <div class="cover">
-                        ${item.cover_path
-                            ? `<img src="/api/stream/${item.id}/cover" alt="${item.title}" loading="lazy">`
-                            : `<span class="placeholder">${this.typeIcon(item.media_type)}</span>`
-                        }
+                        <img src="/api/stream/${item.id}/cover?token=${App.token}" alt="${item.title}" loading="lazy"
+                             onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+                        <span class="placeholder" style="display:none">${icon}</span>
                     </div>
                     <div class="meta">
                         <div class="title" title="${item.title}">${item.title}</div>
                         <div class="sub">${item.year || ""} ${item.media_type} ${item.artist ? "· " + item.artist : ""}</div>
                     </div>
                 </div>
-            `).join("");
+            `;}).join("");
         } catch (err) {
             grid.innerHTML = "";
             App.toast(err.message, "error");

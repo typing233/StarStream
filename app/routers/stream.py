@@ -95,9 +95,14 @@ def stream_media(media_id: int, request: Request, db: Session = Depends(get_db),
 @router.get("/{media_id}/cover")
 def get_cover(media_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_user_flexible)):
     item = _verify_access(media_id, user, db)
-    if not item.cover_path or not os.path.isfile(item.cover_path):
-        raise HTTPException(status_code=404, detail="No cover available")
-    return FileResponse(item.cover_path, media_type="image/jpeg")
+    if item.cover_path and os.path.isfile(item.cover_path):
+        return FileResponse(item.cover_path, media_type="image/jpeg")
+    from app.services.scanner import generate_default_cover, file_hash
+    mid = file_hash(item.file_path)
+    cover = generate_default_cover(mid, item.title, item.media_type)
+    if cover and os.path.isfile(cover):
+        return FileResponse(cover, media_type="image/jpeg")
+    raise HTTPException(status_code=404, detail="No cover available")
 
 
 @router.get("/{media_id}/info")
@@ -108,6 +113,7 @@ def get_media_info(media_id: int, request: Request, db: Session = Depends(get_db
         "title": item.title,
         "year": item.year,
         "media_type": item.media_type,
+        "file_ext": os.path.splitext(item.file_path)[1].lower(),
         "duration": item.duration,
         "width": item.width,
         "height": item.height,
