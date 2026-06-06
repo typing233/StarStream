@@ -1,65 +1,66 @@
-import { api, setAuth, navigate } from './app.js';
-
-export function renderAuth(container) {
-    container.innerHTML = `
-        <div class="auth-container">
-            <div class="auth-box">
-                <h1>StarStream</h1>
-                <p>个人媒体流服务</p>
-                <div class="form-group">
-                    <label>用户名</label>
-                    <input type="text" id="auth-username" placeholder="输入用户名">
-                </div>
-                <div class="form-group">
-                    <label>密码</label>
-                    <input type="password" id="auth-password" placeholder="输入密码">
-                </div>
-                <div id="auth-error" class="error-msg hidden"></div>
-                <div class="auth-actions">
-                    <button id="login-btn" class="btn">登录</button>
-                    <button id="register-btn" class="btn btn-outline">注册</button>
+const Auth = {
+    render() {
+        const app = document.getElementById("app");
+        app.innerHTML = `
+            <div class="auth-container">
+                <h2 id="auth-title">Login</h2>
+                <form id="auth-form">
+                    <div class="form-group">
+                        <label>Username</label>
+                        <input type="text" id="auth-username" required minlength="3">
+                    </div>
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" id="auth-password" required minlength="4">
+                    </div>
+                    <button type="submit" class="btn btn-block">Login</button>
+                </form>
+                <div class="toggle-link">
+                    <span id="auth-toggle-text">Don't have an account? </span>
+                    <a id="auth-toggle">Register</a>
                 </div>
             </div>
-        </div>
-    `;
+        `;
+        this.isLogin = true;
+        document.getElementById("auth-toggle").addEventListener("click", () => this.toggle());
+        document.getElementById("auth-form").addEventListener("submit", (e) => this.submit(e));
+    },
 
-    const usernameInput = document.getElementById('auth-username');
-    const passwordInput = document.getElementById('auth-password');
-    const errorEl = document.getElementById('auth-error');
+    toggle() {
+        this.isLogin = !this.isLogin;
+        document.getElementById("auth-title").textContent = this.isLogin ? "Login" : "Register";
+        document.querySelector("#auth-form .btn").textContent = this.isLogin ? "Login" : "Register";
+        document.getElementById("auth-toggle").textContent = this.isLogin ? "Register" : "Login";
+        document.getElementById("auth-toggle-text").textContent = this.isLogin
+            ? "Don't have an account? "
+            : "Already have an account? ";
+    },
 
-    async function doAuth(endpoint) {
-        const username = usernameInput.value.trim();
-        const password = passwordInput.value;
-        if (!username || !password) {
-            showError('请输入用户名和密码');
-            return;
-        }
+    async submit(e) {
+        e.preventDefault();
+        const username = document.getElementById("auth-username").value;
+        const password = document.getElementById("auth-password").value;
+
         try {
-            const res = await fetch(`/api/v1/auth/${endpoint}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password }),
-            });
-            const data = await res.json();
-            if (!res.ok) {
-                showError(data.detail || '操作失败');
-                return;
+            if (!this.isLogin) {
+                await App.api("/api/auth/register", {
+                    method: "POST",
+                    body: JSON.stringify({ username, password }),
+                });
+                App.toast("Registered! Logging in...", "success");
             }
-            setAuth(data.token, data.username, data.role);
-            navigate('browse');
-        } catch (e) {
-            showError('网络错误');
+            const form = new URLSearchParams();
+            form.append("username", username);
+            form.append("password", password);
+            const resp = await fetch("/api/auth/login", {
+                method: "POST",
+                body: form,
+            });
+            if (!resp.ok) throw new Error("Invalid credentials");
+            const data = await resp.json();
+            App.login(data.access_token);
+        } catch (err) {
+            App.toast(err.message, "error");
         }
-    }
-
-    function showError(msg) {
-        errorEl.textContent = msg;
-        errorEl.classList.remove('hidden');
-    }
-
-    document.getElementById('login-btn').addEventListener('click', () => doAuth('login'));
-    document.getElementById('register-btn').addEventListener('click', () => doAuth('register'));
-    passwordInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') doAuth('login');
-    });
-}
+    },
+};

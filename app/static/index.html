@@ -7,23 +7,25 @@
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-    <div id="app">
-        <nav id="navbar" class="hidden">
-            <div class="nav-brand">StarStream</div>
-            <div class="nav-links">
-                <a href="#/browse" class="nav-link" data-page="browse">媒体库</a>
-                <a href="#/libraries" class="nav-link" data-page="libraries">目录管理</a>
-                <a href="#/admin" class="nav-link hidden" data-page="admin" id="admin-link">系统管理</a>
-            </div>
-            <div class="nav-right">
-                <span id="username-display"></span>
-                <button id="logout-btn" class="btn btn-sm">退出</button>
-            </div>
-            <button id="nav-toggle" class="nav-toggle hidden">☰</button>
-        </nav>
-        <main id="content"></main>
-    </div>
-    <div id="toast-container"></div>
-    <script src="/static/js/app.js" type="module"></script>
+    <nav id="navbar">
+        <div class="nav-brand">StarStream</div>
+        <div class="nav-links" id="nav-links"></div>
+    </nav>
+    <main id="app"></main>
+
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/epub.js/0.3.93/epub.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        if (window.pdfjsLib) {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+                'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
+    </script>
+    <script src="/static/js/app.js"></script>
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/library.js"></script>
+    <script src="/static/js/browse.js"></script>
+    <script src="/static/js/player.js"></script>
 </body>
 </html>
