@@ -279,6 +279,7 @@ def scan_library(library_id: int):
         )
 
         new_items_count = 0
+        new_items_data = []
 
         for root, _, files in os.walk(lib.path):
             for fname in files:
@@ -374,8 +375,7 @@ def scan_library(library_id: int):
                 db.flush()
                 new_items_count += 1
 
-                from app.services.plugin_manager import plugin_manager
-                plugin_manager.emit("media_added", {
+                new_items_data.append({
                     "media_id": item.id,
                     "media_type": media_type,
                     "title": title,
@@ -387,8 +387,11 @@ def scan_library(library_id: int):
 
         db.commit()
 
+        from app.services.plugin_manager import plugin_manager
+        for item_data in new_items_data:
+            plugin_manager.emit("media_added", item_data)
+
         if new_items_count > 0:
-            from app.services.plugin_manager import plugin_manager
             plugin_manager.emit("library_scanned", {
                 "library_id": library_id,
                 "new_items": new_items_count,

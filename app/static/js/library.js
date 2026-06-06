@@ -150,7 +150,7 @@ const Library = {
 
             try {
                 const xhr = new XMLHttpRequest();
-                xhr.open("POST", "/api/libraries/upload");
+                xhr.open("POST", App.url("/api/libraries/upload"));
                 xhr.setRequestHeader("Authorization", `Bearer ${App.token}`);
 
                 xhr.upload.addEventListener("progress", (ev) => {

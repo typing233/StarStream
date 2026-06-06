@@ -52,7 +52,7 @@ const Auth = {
             const form = new URLSearchParams();
             form.append("username", username);
             form.append("password", password);
-            const resp = await fetch("/api/auth/login", {
+            const resp = await fetch(App.url("/api/auth/login"), {
                 method: "POST",
                 body: form,
             });

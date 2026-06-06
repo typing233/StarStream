@@ -14,6 +14,7 @@ const Player = {
         window.removeEventListener("beforeunload", this._onBeforeUnload);
         this._mediaElement = null;
         this._playedSeconds = 0;
+        this._lastReportedSeconds = 0;
         this._lastTimeUpdate = 0;
         this._reported = false;
     },
@@ -24,6 +25,7 @@ const Player = {
         this._mediaElement = mediaElement;
         this._currentMediaId = mediaId;
         this._playedSeconds = 0;
+        this._lastReportedSeconds = 0;
         this._lastTimeUpdate = 0;
         this._reported = false;
 
@@ -37,11 +39,11 @@ const Player = {
         });
 
         mediaElement.addEventListener("pause", () => {
-            this._reportProgress(false);
+            this._reportDelta(false);
         });
 
         mediaElement.addEventListener("ended", () => {
-            this._reportProgress(true);
+            this._reportDelta(true);
             this._reported = true;
         });
 
@@ -49,23 +51,26 @@ const Player = {
         window.addEventListener("beforeunload", this._onBeforeUnload);
     },
 
-    _reportProgress(completed) {
-        if (this._playedSeconds < 1) return;
+    _reportDelta(completed) {
+        const delta = Math.round(this._playedSeconds - this._lastReportedSeconds);
+        if (delta < 1) return;
+        this._lastReportedSeconds = this._playedSeconds;
         const mediaId = this._currentMediaId;
-        const duration = Math.round(this._playedSeconds);
         App.api("/api/stats/play", {
             method: "POST",
-            body: JSON.stringify({ media_id: parseInt(mediaId), duration_watched: duration, completed }),
+            body: JSON.stringify({ media_id: parseInt(mediaId), duration_watched: delta, completed }),
         }).catch(() => {});
     },
 
     _reportFinal() {
-        if (this._playedSeconds < 1 || this._reported) return;
+        if (this._reported) return;
         this._reported = true;
+        const delta = Math.round(this._playedSeconds - this._lastReportedSeconds);
+        if (delta < 1) return;
+        this._lastReportedSeconds = this._playedSeconds;
         const mediaId = this._currentMediaId;
-        const duration = Math.round(this._playedSeconds);
         const completed = this._mediaElement && this._mediaElement.ended;
-        const body = JSON.stringify({ media_id: parseInt(mediaId), duration_watched: duration, completed: !!completed });
+        const body = JSON.stringify({ media_id: parseInt(mediaId), duration_watched: delta, completed: !!completed });
         try {
             fetch(App.url("/api/stats/play"), {
                 method: "POST",
