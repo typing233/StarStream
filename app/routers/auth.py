@@ -23,6 +23,7 @@ class TokenResponse(BaseModel):
 class UserResponse(BaseModel):
     id: int
     username: str
+    role: str
 
 
 @router.post("/register", response_model=UserResponse)
@@ -32,11 +33,13 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.username == req.username).first()
     if existing:
         raise HTTPException(status_code=409, detail="Username already taken")
-    user = User(username=req.username, hashed_password=hash_password(req.password))
+    user_count = db.query(User).count()
+    role = "admin" if user_count == 0 else "user"
+    user = User(username=req.username, hashed_password=hash_password(req.password), role=role)
     db.add(user)
     db.commit()
     db.refresh(user)
-    return UserResponse(id=user.id, username=user.username)
+    return UserResponse(id=user.id, username=user.username, role=user.role)
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -50,4 +53,4 @@ def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
 
 @router.get("/me", response_model=UserResponse)
 def me(user: User = Depends(get_current_user)):
-    return UserResponse(id=user.id, username=user.username)
+    return UserResponse(id=user.id, username=user.username, role=user.role)

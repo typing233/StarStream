@@ -1,7 +1,10 @@
 const Player = {
     hls: null,
+    _playStartTime: null,
+    _currentMediaId: null,
 
     async render(mediaId) {
+        this._currentMediaId = mediaId;
         const app = document.getElementById("app");
         app.innerHTML = `<button class="back-btn" onclick="history.back()">&larr; Back</button><div class="player-container" id="player-container">Loading...</div>`;
 
@@ -13,9 +16,18 @@ const Player = {
             else if (info.media_type === "audio") this.renderAudio(container, mediaId, info);
             else if (info.media_type === "image") this.renderImage(container, mediaId, info);
             else if (info.media_type === "ebook") this.renderEbook(container, mediaId, info);
+
+            this.recordPlay(mediaId, 0, false);
         } catch (err) {
             App.toast(err.message, "error");
         }
+    },
+
+    recordPlay(mediaId, duration, completed) {
+        App.api("/api/stats/play", {
+            method: "POST",
+            body: JSON.stringify({ media_id: parseInt(mediaId), duration_watched: duration, completed }),
+        }).catch(() => {});
     },
 
     renderVideo(container, mediaId, info) {
@@ -59,6 +71,7 @@ const Player = {
         </select>`;
 
         controls.innerHTML = controlsHtml;
+        Cast.renderCastButton(controls, mediaId);
 
         this.playDirect(video, mediaId, token);
 
@@ -154,8 +167,11 @@ const Player = {
                     ${info.artist ? info.artist + " · " : ""}${info.album || ""}
                     ${info.duration ? " · " + this.formatDuration(info.duration) : ""}
                 </div>
+                <div class="player-controls" id="player-controls"></div>
             </div>
         `;
+        const controls = document.getElementById("player-controls");
+        Cast.renderCastButton(controls, mediaId);
     },
 
     renderImage(container, mediaId, info) {

@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from pydantic import BaseModel
 from typing import List
 import os
-import shutil
+import math
 
 from app.config import DATA_DIR
 from app.database import get_db
@@ -27,6 +28,7 @@ class LibraryResponse(BaseModel):
     name: str
     path: str
     media_count: int = 0
+    watch_enabled: bool = False
 
 
 class MediaItemResponse(BaseModel):
@@ -40,6 +42,15 @@ class MediaItemResponse(BaseModel):
     cover_path: str | None
     artist: str | None
     album: str | None
+    play_count: int = 0
+
+
+class PaginatedMedia(BaseModel):
+    items: List[MediaItemResponse]
+    total: int
+    page: int
+    per_page: int
+    pages: int
 
 
 @router.post("", response_model=LibraryResponse)
@@ -65,7 +76,10 @@ def list_libraries(db: Session = Depends(get_db), user: User = Depends(get_curre
     result = []
     for lib in libs:
         count = db.query(MediaItem).filter(MediaItem.library_id == lib.id).count()
-        result.append(LibraryResponse(id=lib.id, name=lib.name, path=lib.path, media_count=count))
+        result.append(LibraryResponse(
+            id=lib.id, name=lib.name, path=lib.path,
+            media_count=count, watch_enabled=lib.watch_enabled or False,
+        ))
     return result
 
 
@@ -93,27 +107,60 @@ def rescan_library(
     return {"ok": True, "message": "Scan started"}
 
 
-@router.get("/{library_id}/media", response_model=List[MediaItemResponse])
+@router.get("/{library_id}/media", response_model=PaginatedMedia)
 def list_media(
     library_id: int,
     media_type: str | None = None,
+    q: str | None = Query(default=None),
+    sort: str = Query(default="title"),
+    order: str = Query(default="asc"),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=30, ge=1, le=100),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     lib = db.query(Library).filter(Library.id == library_id, Library.owner_id == user.id).first()
     if not lib:
         raise HTTPException(status_code=404, detail="Library not found")
-    q = db.query(MediaItem).filter(MediaItem.library_id == library_id)
+
+    query = db.query(MediaItem).filter(MediaItem.library_id == library_id)
     if media_type:
-        q = q.filter(MediaItem.media_type == media_type)
-    return [
-        MediaItemResponse(
-            id=m.id, title=m.title, year=m.year, media_type=m.media_type,
-            file_path=m.file_path, file_size=m.file_size, duration=m.duration,
-            cover_path=m.cover_path, artist=m.artist, album=m.album,
+        query = query.filter(MediaItem.media_type == media_type)
+    if q:
+        query = query.filter(
+            MediaItem.title.ilike(f"%{q}%") | MediaItem.artist.ilike(f"%{q}%") | MediaItem.album.ilike(f"%{q}%")
         )
-        for m in q.all()
-    ]
+
+    sort_col = {
+        "title": MediaItem.title,
+        "year": MediaItem.year,
+        "created_at": MediaItem.created_at,
+        "duration": MediaItem.duration,
+        "file_size": MediaItem.file_size,
+        "play_count": MediaItem.play_count,
+    }.get(sort, MediaItem.title)
+
+    if order == "desc":
+        query = query.order_by(sort_col.desc())
+    else:
+        query = query.order_by(sort_col.asc())
+
+    total = query.count()
+    pages = max(1, math.ceil(total / per_page))
+    items = query.offset((page - 1) * per_page).limit(per_page).all()
+
+    return PaginatedMedia(
+        items=[
+            MediaItemResponse(
+                id=m.id, title=m.title, year=m.year, media_type=m.media_type,
+                file_path=m.file_path, file_size=m.file_size, duration=m.duration,
+                cover_path=m.cover_path, artist=m.artist, album=m.album,
+                play_count=m.play_count or 0,
+            )
+            for m in items
+        ],
+        total=total, page=page, per_page=per_page, pages=pages,
+    )
 
 
 @router.post("/upload", response_model=LibraryResponse)
@@ -145,3 +192,37 @@ async def upload_library(
     db.refresh(lib)
     background_tasks.add_task(scan_library, lib.id)
     return LibraryResponse(id=lib.id, name=lib.name, path=lib.path, media_count=0)
+
+
+@router.post("/{library_id}/watch")
+def enable_watch(library_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    lib = db.query(Library).filter(Library.id == library_id, Library.owner_id == user.id).first()
+    if not lib:
+        raise HTTPException(status_code=404, detail="Library not found")
+    lib.watch_enabled = True
+    db.commit()
+    from app.services.watcher import watcher_manager
+    watcher_manager.watch(lib.id, lib.path)
+    return {"ok": True, "message": f"Watching {lib.name}"}
+
+
+@router.delete("/{library_id}/watch")
+def disable_watch(library_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    lib = db.query(Library).filter(Library.id == library_id, Library.owner_id == user.id).first()
+    if not lib:
+        raise HTTPException(status_code=404, detail="Library not found")
+    lib.watch_enabled = False
+    db.commit()
+    from app.services.watcher import watcher_manager
+    watcher_manager.unwatch(lib.id)
+    return {"ok": True, "message": f"Stopped watching {lib.name}"}
+
+
+@router.get("/watch/status")
+def watch_status(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    from app.services.watcher import watcher_manager
+    libs = db.query(Library).filter(Library.owner_id == user.id, Library.watch_enabled == True).all()
+    return [
+        {"library_id": lib.id, "name": lib.name, "active": watcher_manager.is_watching(lib.id)}
+        for lib in libs
+    ]

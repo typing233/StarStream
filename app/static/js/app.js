@@ -1,5 +1,6 @@
 const App = {
     token: localStorage.getItem("token"),
+    userRole: localStorage.getItem("userRole"),
     currentView: null,
 
     init() {
@@ -8,6 +9,16 @@ const App = {
             location.hash = "#/browse";
         });
         this.route();
+        if (this.token) this.fetchUserInfo();
+    },
+
+    async fetchUserInfo() {
+        try {
+            const user = await this.api("/api/auth/me");
+            this.userRole = user.role;
+            localStorage.setItem("userRole", user.role);
+            this.updateNav();
+        } catch (e) {}
     },
 
     route() {
@@ -19,6 +30,8 @@ const App = {
         this.updateNav();
 
         if (hash.startsWith("#/auth")) Auth.render();
+        else if (hash.startsWith("#/admin")) Admin.render();
+        else if (hash.startsWith("#/stats")) Stats.render();
         else if (hash.startsWith("#/libraries")) Library.render();
         else if (hash.startsWith("#/browse/")) Browse.renderLibrary(hash.split("/")[2]);
         else if (hash.startsWith("#/browse")) Browse.render();
@@ -28,27 +41,37 @@ const App = {
 
     updateNav() {
         const nav = document.getElementById("nav-links");
+        const searchArea = document.getElementById("nav-search");
         if (!this.token) {
             nav.innerHTML = "";
+            searchArea.innerHTML = "";
             return;
         }
-        nav.innerHTML = `
+        let links = `
             <a href="#/browse">Browse</a>
             <a href="#/libraries">Libraries</a>
-            <button onclick="App.logout()">Logout</button>
+            <a href="#/stats">Stats</a>
         `;
+        if (this.userRole === "admin") {
+            links += `<a href="#/admin">Admin</a>`;
+        }
+        links += `<button onclick="App.logout()">Logout</button>`;
+        nav.innerHTML = links;
+        Search.renderSearchBar();
     },
 
     login(token) {
         this.token = token;
         localStorage.setItem("token", token);
+        this.fetchUserInfo();
         location.hash = "#/browse";
-        this.updateNav();
     },
 
     logout() {
         this.token = null;
+        this.userRole = null;
         localStorage.removeItem("token");
+        localStorage.removeItem("userRole");
         location.hash = "#/auth";
     },
 
