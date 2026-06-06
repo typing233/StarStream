@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 
@@ -40,7 +40,11 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 @app.get("/")
 def index():
-    return FileResponse(str(static_dir / "index.html"))
+    html = (static_dir / "index.html").read_text()
+    base_url_js = BASE_URL.rstrip("/")
+    injection = f'<script>window.__BASE_URL__="{base_url_js}";</script>'
+    html = html.replace("</head>", injection + "\n</head>")
+    return HTMLResponse(html)
 
 
 @app.on_event("startup")

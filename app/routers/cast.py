@@ -34,7 +34,9 @@ def cast_play(req: CastPlayRequest, request: Request, db: Session = Depends(get_
     host = request.headers.get("host", request.base_url.netloc)
     scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
     token = request.headers.get("authorization", "").replace("Bearer ", "")
-    stream_url = f"{scheme}://{host}/api/stream/{item.id}?token={token}"
+    from app.config import BASE_URL
+    prefix = BASE_URL.rstrip("/")
+    stream_url = f"{scheme}://{host}{prefix}/api/stream/{item.id}?token={token}"
 
     from app.routers.stream import _get_content_type
     content_type = _get_content_type(item.media_type, item.file_path)

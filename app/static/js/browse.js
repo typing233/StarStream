@@ -117,7 +117,7 @@ const Browse = {
                 return `
                 <div class="media-card" onclick="location.hash='#/play/${item.id}'">
                     <div class="cover">
-                        <img src="/api/stream/${item.id}/cover?token=${App.token}" alt="${item.title}" loading="lazy"
+                        <img src="${App.url("/api/stream/" + item.id + "/cover")}?token=${App.token}" alt="${item.title}" loading="lazy"
                              onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
                         <span class="placeholder" style="display:none">${icon}</span>
                     </div>

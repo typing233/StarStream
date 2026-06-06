@@ -278,6 +278,8 @@ def scan_library(library_id: int):
             row[0] for row in db.query(MediaItem.file_path).filter(MediaItem.library_id == library_id).all()
         )
 
+        new_items_count = 0
+
         for root, _, files in os.walk(lib.path):
             for fname in files:
                 full_path = os.path.join(root, fname)
@@ -369,7 +371,27 @@ def scan_library(library_id: int):
                     subtitle_tracks=subtitle_tracks_json,
                 )
                 db.add(item)
+                db.flush()
+                new_items_count += 1
+
+                from app.services.plugin_manager import plugin_manager
+                plugin_manager.emit("media_added", {
+                    "media_id": item.id,
+                    "media_type": media_type,
+                    "title": title,
+                    "year": year,
+                    "file_path": full_path,
+                    "artist": artist,
+                    "album": album,
+                })
 
         db.commit()
+
+        if new_items_count > 0:
+            from app.services.plugin_manager import plugin_manager
+            plugin_manager.emit("library_scanned", {
+                "library_id": library_id,
+                "new_items": new_items_count,
+            })
     finally:
         db.close()

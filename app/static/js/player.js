@@ -1,12 +1,86 @@
 const Player = {
     hls: null,
-    _playStartTime: null,
     _currentMediaId: null,
+    _playedSeconds: 0,
+    _lastTimeUpdate: 0,
+    _reported: false,
+    _mediaElement: null,
+
+    _cleanup() {
+        if (this._mediaElement && this._currentMediaId && !this._reported) {
+            this._reportFinal();
+        }
+        this.destroyHls();
+        window.removeEventListener("beforeunload", this._onBeforeUnload);
+        this._mediaElement = null;
+        this._playedSeconds = 0;
+        this._lastTimeUpdate = 0;
+        this._reported = false;
+    },
+
+    _onBeforeUnload: null,
+
+    _setupTracking(mediaElement, mediaId) {
+        this._mediaElement = mediaElement;
+        this._currentMediaId = mediaId;
+        this._playedSeconds = 0;
+        this._lastTimeUpdate = 0;
+        this._reported = false;
+
+        mediaElement.addEventListener("timeupdate", () => {
+            const now = mediaElement.currentTime;
+            if (this._lastTimeUpdate > 0 && now > this._lastTimeUpdate) {
+                const delta = now - this._lastTimeUpdate;
+                if (delta < 2) this._playedSeconds += delta;
+            }
+            this._lastTimeUpdate = now;
+        });
+
+        mediaElement.addEventListener("pause", () => {
+            this._reportProgress(false);
+        });
+
+        mediaElement.addEventListener("ended", () => {
+            this._reportProgress(true);
+            this._reported = true;
+        });
+
+        this._onBeforeUnload = () => { this._reportFinal(); };
+        window.addEventListener("beforeunload", this._onBeforeUnload);
+    },
+
+    _reportProgress(completed) {
+        if (this._playedSeconds < 1) return;
+        const mediaId = this._currentMediaId;
+        const duration = Math.round(this._playedSeconds);
+        App.api("/api/stats/play", {
+            method: "POST",
+            body: JSON.stringify({ media_id: parseInt(mediaId), duration_watched: duration, completed }),
+        }).catch(() => {});
+    },
+
+    _reportFinal() {
+        if (this._playedSeconds < 1 || this._reported) return;
+        this._reported = true;
+        const mediaId = this._currentMediaId;
+        const duration = Math.round(this._playedSeconds);
+        const completed = this._mediaElement && this._mediaElement.ended;
+        const body = JSON.stringify({ media_id: parseInt(mediaId), duration_watched: duration, completed: !!completed });
+        try {
+            fetch(App.url("/api/stats/play"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${App.token}` },
+                body: body,
+                keepalive: true,
+            });
+        } catch (e) {}
+    },
 
     async render(mediaId) {
+        this._cleanup();
         this._currentMediaId = mediaId;
         const app = document.getElementById("app");
-        app.innerHTML = `<button class="back-btn" onclick="history.back()">&larr; Back</button><div class="player-container" id="player-container">Loading...</div>`;
+        app.innerHTML = `<button class="back-btn" onclick="Player._cleanup();history.back()">&larr; Back</button><div class="player-container" id="player-container">Loading...</div>`;
 
         try {
             const info = await App.api(`/api/stream/${mediaId}/info`);
@@ -16,18 +90,9 @@ const Player = {
             else if (info.media_type === "audio") this.renderAudio(container, mediaId, info);
             else if (info.media_type === "image") this.renderImage(container, mediaId, info);
             else if (info.media_type === "ebook") this.renderEbook(container, mediaId, info);
-
-            this.recordPlay(mediaId, 0, false);
         } catch (err) {
             App.toast(err.message, "error");
         }
-    },
-
-    recordPlay(mediaId, duration, completed) {
-        App.api("/api/stats/play", {
-            method: "POST",
-            body: JSON.stringify({ media_id: parseInt(mediaId), duration_watched: duration, completed }),
-        }).catch(() => {});
     },
 
     renderVideo(container, mediaId, info) {
@@ -45,6 +110,7 @@ const Player = {
         `;
 
         const video = document.getElementById("video-player");
+        this._setupTracking(video, mediaId);
         const controls = document.getElementById("player-controls");
 
         let controlsHtml = "";
@@ -107,7 +173,7 @@ const Player = {
                 if (idx >= 0) {
                     const track = document.createElement("track");
                     track.kind = "subtitles";
-                    track.src = `/api/transcode/${mediaId}/subtitle/${idx}?token=${token}`;
+                    track.src = App.url(`/api/transcode/${mediaId}/subtitle/${idx}?token=${token}`);
                     track.default = true;
                     video.appendChild(track);
                     setTimeout(() => { if (video.textTracks[0]) video.textTracks[0].mode = "showing"; }, 500);
@@ -118,13 +184,13 @@ const Player = {
 
     playDirect(video, mediaId, token) {
         this.destroyHls();
-        video.src = `/api/stream/${mediaId}?token=${token}`;
+        video.src = App.url(`/api/stream/${mediaId}?token=${token}`);
         video.load();
     },
 
     playHls(video, mediaId, quality, audioTrack, token) {
         this.destroyHls();
-        const src = `/api/transcode/${mediaId}/hls/master.m3u8?resolution=${quality}&audio_track=${audioTrack}&token=${token}`;
+        const src = App.url(`/api/transcode/${mediaId}/hls/master.m3u8?resolution=${quality}&audio_track=${audioTrack}&token=${token}`);
 
         if (Hls && Hls.isSupported()) {
             this.hls = new Hls({
@@ -154,12 +220,12 @@ const Player = {
         const token = App.token;
         container.innerHTML = `
             <div style="text-align:center;padding:40px 0">
-                <img src="/api/stream/${mediaId}/cover?token=${token}" alt="cover"
+                <img src="${App.url("/api/stream/" + mediaId + "/cover")}?token=${token}" alt="cover"
                      style="width:250px;height:250px;object-fit:cover;border-radius:var(--radius);background:var(--bg-tertiary)"
                      onerror="this.style.display='none'">
             </div>
             <audio id="audio-player" controls preload="metadata" style="width:100%">
-                <source src="/api/stream/${mediaId}?token=${token}">
+                <source src="${App.url("/api/stream/" + mediaId)}?token=${token}">
             </audio>
             <div class="player-info">
                 <h2>${info.title}</h2>
@@ -170,6 +236,8 @@ const Player = {
                 <div class="player-controls" id="player-controls"></div>
             </div>
         `;
+        const audio = document.getElementById("audio-player");
+        this._setupTracking(audio, mediaId);
         const controls = document.getElementById("player-controls");
         Cast.renderCastButton(controls, mediaId);
     },
@@ -177,7 +245,7 @@ const Player = {
     renderImage(container, mediaId, info) {
         container.innerHTML = `
             <div class="image-viewer">
-                <img src="/api/stream/${mediaId}?token=${App.token}" alt="${info.title}">
+                <img src="${App.url("/api/stream/" + mediaId)}?token=${App.token}" alt="${info.title}">
             </div>
             <div class="player-info">
                 <h2>${info.title}</h2>
@@ -187,7 +255,7 @@ const Player = {
     },
 
     renderEbook(container, mediaId, info) {
-        const streamUrl = `/api/stream/${mediaId}?token=${App.token}`;
+        const streamUrl = App.url(`/api/stream/${mediaId}?token=${App.token}`);
         const ext = (info.file_ext || "").toLowerCase();
 
         container.innerHTML = `

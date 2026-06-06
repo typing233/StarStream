@@ -39,6 +39,10 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    from app.services.plugin_manager import plugin_manager
+    plugin_manager.emit("user_registered", {"user_id": user.id, "username": user.username})
+
     return UserResponse(id=user.id, username=user.username, role=user.role)
 
 

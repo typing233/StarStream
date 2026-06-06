@@ -1,6 +1,7 @@
 const App = {
     token: localStorage.getItem("token"),
     userRole: localStorage.getItem("userRole"),
+    baseUrl: (window.__BASE_URL__ || ""),
     currentView: null,
 
     init() {
@@ -26,6 +27,9 @@ const App = {
         if (!this.token && !hash.startsWith("#/auth")) {
             location.hash = "#/auth";
             return;
+        }
+        if (typeof Player !== "undefined" && !hash.startsWith("#/play/")) {
+            Player._cleanup();
         }
         this.updateNav();
 
@@ -75,13 +79,17 @@ const App = {
         location.hash = "#/auth";
     },
 
+    url(path) {
+        return this.baseUrl + path;
+    },
+
     async api(path, options = {}) {
         const headers = options.headers || {};
         if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
         if (options.body && !(options.body instanceof FormData)) {
             headers["Content-Type"] = "application/json";
         }
-        const resp = await fetch(path, { ...options, headers });
+        const resp = await fetch(this.url(path), { ...options, headers });
         if (resp.status === 401) {
             this.logout();
             throw new Error("Unauthorized");
